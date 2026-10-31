@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if ! command -v pg_config >/dev/null || [ ! -x "$(pg_config --bindir)/postgres" ]; then
+  echo 'Installing PostgreSQL for optional integration checks'
+  sudo apt-get update -qq
+  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq postgresql
+fi
+
+echo 'Installing locked Python dependencies'
+uv sync --locked --extra ml

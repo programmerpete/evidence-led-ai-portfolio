@@ -3,7 +3,14 @@ name = "evidence-led-investigation"
 version = "0.1.0"
 description = "Synthetic financial-crime investigation portfolio lab"
 requires-python = ">=3.11"
-dependencies = ["fastapi>=0.115,<1", "uvicorn>=0.30,<1", "langgraph>=1,<2"]
+dependencies = [
+    "fastapi>=0.115,<1",
+    "uvicorn>=0.30,<1",
+    "langgraph>=1,<2",
+    "sqlalchemy>=2,<3",
+    "alembic>=1.14,<2",
+    "psycopg[binary]>=3.2,<4",
+]
 
 [project.optional-dependencies]
 ml = [

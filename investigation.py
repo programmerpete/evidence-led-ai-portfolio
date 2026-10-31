@@ -1,15 +1,19 @@
 """Synthetic-only lab. Deterministic evidence workflow, not a fraud classifier or LLM."""
 
 import json
-import sqlite3
-from contextlib import contextmanager
+import os
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Literal, TypedDict
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from langgraph.graph import END, START, StateGraph
-from pydantic import AwareDatetime, BaseModel, Field
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
+from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
+
+from storage import open_database
 
 
 class InvestigationRequest(BaseModel):
@@ -23,6 +27,10 @@ class Evidence(BaseModel):
     description: str
     event_time: AwareDatetime | None = None
     known_at: AwareDatetime | None = None
+    version: int | None = None
+    source_system: str | None = None
+    batch_id: str | None = None
+    relationship: Literal["used_device", "transferred_to", "profile"] | None = None
 
 
 class Finding(BaseModel):
@@ -42,6 +50,20 @@ class Investigation(BaseModel):
 class Review(BaseModel):
     decision: Literal["escalate", "close", "request_information"]
     rationale: str = Field(min_length=10, max_length=2000, pattern=r"\S")
+
+
+class Correction(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expected_version: int = Field(ge=1)
+    source: str = Field(min_length=1, max_length=100)
+    target: str = Field(min_length=1, max_length=100)
+    relationship: Literal["used_device", "transferred_to", "profile"]
+    description: str = Field(min_length=1, max_length=2000, pattern=r"\S")
+    event_time: AwareDatetime
+    source_system: str = Field(min_length=1, max_length=100)
+    batch_id: str = Field(min_length=1, max_length=100)
+    reason: str = Field(min_length=10, max_length=2000, pattern=r"\S")
 
 
 class WorkflowState(TypedDict):
@@ -75,35 +97,25 @@ builder.add_edge("draft_cited_facts", END)
 workflow = builder.compile()
 
 
-def create_app(database: str = "investigation.db") -> FastAPI:
-    app = FastAPI(title="Evidence-led investigation lab", version="0.1.0")
+def create_app(database: str | None = None) -> FastAPI:
+    engine = open_database(database or os.getenv("DATABASE_URL", "investigation.db"))
 
-    @contextmanager
-    def connect():
-        connection = sqlite3.connect(database)
-        connection.row_factory = sqlite3.Row
+    @asynccontextmanager
+    async def lifespan(app):
         try:
-            with connection:
-                yield connection
+            yield
         finally:
-            connection.close()
+            engine.dispose()
 
-    with connect() as db:
-        db.executescript("""
-            CREATE TABLE IF NOT EXISTS cases (id TEXT PRIMARY KEY, owner TEXT NOT NULL);
-            CREATE TABLE IF NOT EXISTS evidence (
-                id TEXT PRIMARY KEY, case_id TEXT NOT NULL, source TEXT NOT NULL,
-                target TEXT NOT NULL, description TEXT NOT NULL,
-                event_time TEXT NOT NULL, known_at TEXT NOT NULL,
-                restricted INTEGER NOT NULL DEFAULT 0
-            );
-            CREATE TABLE IF NOT EXISTS audit (
-                id INTEGER PRIMARY KEY, case_id TEXT NOT NULL, actor TEXT NOT NULL,
-                action TEXT NOT NULL, payload TEXT NOT NULL, recorded_at TEXT NOT NULL
-            );
-            INSERT OR IGNORE INTO cases VALUES ('CASE-001', 'analyst-a');
-            INSERT OR IGNORE INTO cases VALUES ('CASE-002', 'analyst-b');
+    app = FastAPI(title="Evidence-led investigation lab", version="0.2.0", lifespan=lifespan)
+
+    with engine.begin() as db:
+        db.execute(
+            text("""
+            INSERT INTO cases (id, owner) VALUES
+              ('CASE-001', 'analyst-a'), ('CASE-002', 'analyst-b') ON CONFLICT DO NOTHING
         """)
+        )
         # Fixed times make late-arrival and freshness demonstrations reproducible.
         rows = [
             (
@@ -147,7 +159,37 @@ def create_app(database: str = "investigation.db") -> FastAPI:
                 1,
             ),
         ]
-        db.executemany("INSERT OR IGNORE INTO evidence VALUES (?, ?, ?, ?, ?, ?, ?, ?)", rows)
+        for row in rows:
+            fields = dict(
+                zip(
+                    (
+                        "id",
+                        "case_id",
+                        "source",
+                        "target",
+                        "description",
+                        "event_time",
+                        "known_at",
+                        "restricted",
+                    ),
+                    row,
+                    strict=True,
+                )
+            )
+            fields["relationship"] = (
+                "profile" if row[7] else "transferred_to" if row[0] == "E-003" else "used_device"
+            )
+            db.execute(
+                text("""
+                INSERT INTO evidence_versions
+                  (id, version, case_id, source, target, description, event_time, known_at,
+                   restricted, relationship, source_system, batch_id)
+                VALUES (:id, 1, :case_id, :source, :target, :description, :event_time, :known_at,
+                        :restricted, :relationship, 'synthetic-fixture', 'seed-001')
+                ON CONFLICT DO NOTHING
+            """),
+                fields,
+            )
 
     bearer = HTTPBearer(auto_error=False)
 
@@ -160,26 +202,30 @@ def create_app(database: str = "investigation.db") -> FastAPI:
         return identity
 
     def authorize(case_id: str, identity: str):
-        with connect() as db:
-            row = db.execute("SELECT owner FROM cases WHERE id = ?", (case_id,)).fetchone()
+        with engine.connect() as db:
+            row = (
+                db.execute(text("SELECT owner FROM cases WHERE id = :id"), {"id": case_id})
+                .mappings()
+                .first()
+            )
         # Do not reveal whether another analyst's case exists.
         if row is None or row["owner"] != identity:
             raise HTTPException(404, "Case not found")
 
-    def audit(case_id: str, identity: str, action: str, payload: dict):
-        with connect() as db:
-            cursor = db.execute(
-                "INSERT INTO audit (case_id, actor, action, payload, recorded_at) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (
-                    case_id,
-                    identity,
-                    action,
-                    json.dumps(payload),
-                    datetime.now(UTC).isoformat(),
-                ),
-            )
-            return cursor.lastrowid
+    def audit(db, case_id: str, identity: str, action: str, payload: dict):
+        return db.execute(
+            text("""
+            INSERT INTO audit (case_id, actor, action, payload, recorded_at)
+            VALUES (:case_id, :actor, :action, :payload, :recorded_at) RETURNING id
+        """),
+            {
+                "case_id": case_id,
+                "actor": identity,
+                "action": action,
+                "payload": json.dumps(payload),
+                "recorded_at": datetime.now(UTC).isoformat(),
+            },
+        ).scalar_one()
 
     @app.get("/health")
     def health():
@@ -188,16 +234,27 @@ def create_app(database: str = "investigation.db") -> FastAPI:
     @app.post("/cases/{case_id}/investigate", response_model=Investigation)
     def investigate(case_id: str, request: InvestigationRequest, identity: str = Depends(actor)):
         authorize(case_id, identity)
-        with connect() as db:
-            rows = db.execute(
-                "SELECT * FROM evidence WHERE case_id = ? ORDER BY id", (case_id,)
-            ).fetchall()
-        # Filter knowledge AND event time before traversal. Future/denied links cannot bridge nodes.
+        with engine.connect() as db:
+            rows = (
+                db.execute(
+                    text(
+                        "SELECT * FROM evidence_versions WHERE case_id = :id ORDER BY id, version"
+                    ),
+                    {"id": case_id},
+                )
+                .mappings()
+                .all()
+            )
+        # Pick the latest version THEN apply event time; an ineligible correction must
+        # not resurrect a superseded fact. Parse offsets rather than comparing timestamp strings.
+        versions = {}
+        for row in rows:
+            if datetime.fromisoformat(row["known_at"]) <= request.as_of:
+                versions[row["id"]] = row
         eligible = [
             row
-            for row in rows
-            if datetime.fromisoformat(row["known_at"]) <= request.as_of
-            and datetime.fromisoformat(row["event_time"]) <= request.as_of
+            for row in versions.values()
+            if datetime.fromisoformat(row["event_time"]) <= request.as_of
         ]
         frontier = {"account-a"}
         visited = set(frontier)
@@ -220,6 +277,10 @@ def create_app(database: str = "investigation.db") -> FastAPI:
                     description=row["description"],
                     event_time=event_time,
                     known_at=datetime.fromisoformat(row["known_at"]),
+                    version=row["version"],
+                    source_system=row["source_system"],
+                    batch_id=row["batch_id"],
+                    relationship=row["relationship"],
                 )
                 if not stale:
                     next_nodes.update({row["source"], row["target"]} - visited)
@@ -238,22 +299,82 @@ def create_app(database: str = "investigation.db") -> FastAPI:
             {"evidence": list(evidence.values()), "findings": [], "limitations": []}
         )
         response = Investigation(case_id=case_id, as_of=request.as_of, **result)
-        audit(case_id, identity, "investigation", response.model_dump(mode="json"))
+        with engine.begin() as db:
+            audit(db, case_id, identity, "investigation", response.model_dump(mode="json"))
         return response
+
+    @app.post("/cases/{case_id}/evidence/{evidence_id}/corrections", status_code=201)
+    def correct(
+        case_id: str, evidence_id: str, request: Correction, identity: str = Depends(actor)
+    ):
+        authorize(case_id, identity)
+        try:
+            with engine.begin() as db:
+                current = (
+                    db.execute(
+                        text("""
+                    SELECT * FROM evidence_versions WHERE case_id = :case_id AND id = :id
+                    ORDER BY version DESC LIMIT 1
+                """),
+                        {"case_id": case_id, "id": evidence_id},
+                    )
+                    .mappings()
+                    .first()
+                )
+                if current is None or current["restricted"]:
+                    raise HTTPException(404, "Evidence not found")
+                if current["version"] != request.expected_version:
+                    raise HTTPException(409, "Evidence changed; reload before correcting")
+                known_at = max(
+                    datetime.now(UTC),
+                    datetime.fromisoformat(current["known_at"]) + timedelta(microseconds=1),
+                )
+                fields = request.model_dump(mode="json", exclude={"expected_version", "reason"})
+                fields.update(
+                    id=evidence_id,
+                    version=current["version"] + 1,
+                    case_id=case_id,
+                    known_at=known_at.isoformat(),
+                    reason=request.reason,
+                )
+                db.execute(
+                    text("""
+                    INSERT INTO evidence_versions
+                      (id, version, case_id, source, target, relationship, description, event_time,
+                       known_at, restricted, source_system, batch_id, correction_reason)
+                    VALUES (:id, :version, :case_id, :source, :target, :relationship, :description,
+                            :event_time, :known_at, 0, :source_system, :batch_id, :reason)
+                """),
+                    fields,
+                )
+                event_id = audit(db, case_id, identity, "evidence_correction", fields)
+            return {
+                "id": evidence_id,
+                "version": fields["version"],
+                "known_at": known_at,
+                "audit_id": event_id,
+            }
+        except IntegrityError as error:
+            raise HTTPException(409, "Evidence changed; reload before correcting") from error
 
     @app.post("/cases/{case_id}/reviews", status_code=201)
     def review(case_id: str, request: Review, identity: str = Depends(actor)):
         authorize(case_id, identity)
-        event_id = audit(case_id, identity, "human_review", request.model_dump())
+        with engine.begin() as db:
+            event_id = audit(db, case_id, identity, "human_review", request.model_dump())
         return {"audit_id": event_id, "decision": request.decision, "actor": identity}
 
     @app.get("/cases/{case_id}/audit")
     def get_audit(case_id: str, identity: str = Depends(actor)):
         authorize(case_id, identity)
-        with connect() as db:
-            rows = db.execute(
-                "SELECT * FROM audit WHERE case_id = ? ORDER BY id", (case_id,)
-            ).fetchall()
+        with engine.connect() as db:
+            rows = (
+                db.execute(
+                    text("SELECT * FROM audit WHERE case_id = :id ORDER BY id"), {"id": case_id}
+                )
+                .mappings()
+                .all()
+            )
         return [{**dict(row), "payload": json.loads(row["payload"])} for row in rows]
 
     return app

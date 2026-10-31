@@ -33,14 +33,18 @@ demonstrable learning is acceptable. Do not assume a portfolio overrides that re
 **Learning goal:** Python service engineering plus evidence-aware investigation controls.
 
 Current foundation: runnable API, reproducible late-arrival fixture, bounded traversal,
-cited source facts, explicit evidence states, demo case access, persisted human reviews.
+cited source facts, explicit evidence states, demo case access, persisted human reviews,
+PostgreSQL/SQLite storage, Alembic migration, typed links, source/batch lineage and
+append-only corrections with historical replay and competing-edit protection.
 
 Next slices, in priority order:
 
-1. **Governed data:** move to PostgreSQL with versioned migrations; model typed links,
-   source IDs, ingestion batches, effective/known timestamps and append-only corrections.
-   Demonstrate that replaying a historical investigation reproduces the facts then known,
-   while later corrections are visible only at later knowledge cutoffs.
+1. **Governed data (first slice implemented):** PostgreSQL and migration-backed evidence
+   versions now preserve facts at earlier knowledge cutoffs. Next add validated ingestion
+   contracts, source attestations and policy-versioned replay. Current event timestamps
+   are point assertions, not full valid-time intervals; API append-only history is not
+   database-enforced immutability. Move case-history selection to bounded SQL queries
+   before increasing dataset size. CI runs contracts against both storage engines.
 2. **Entity resolution:** use Splink on synthetic name/address variations with labelled
    duplicate/nonduplicate pairs. Hold out labels; measure pair precision/recall and show
    false merges. Never equate shared devices or addresses with confirmed same identity.
