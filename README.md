@@ -1,4 +1,6 @@
-# Evidence-led AI engineering portfolio
+# evidence-led-ai-portfolio
+
+AI portfolio in the fraud space
 
 Two runnable, synthetic-only starting projects for a hands-on banking AI engineering role.
 These are learning labs, **not production banking systems**, compliance advice, or evidence
