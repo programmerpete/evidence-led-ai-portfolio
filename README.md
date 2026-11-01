@@ -2,7 +2,7 @@
 
 AI portfolio in the fraud space
 
-Two runnable, synthetic-only starting projects for a hands-on banking AI engineering role.
+Three runnable, synthetic-only portfolio labs for a hands-on banking AI engineering role.
 These are learning labs, **not production banking systems**, compliance advice, or evidence
 of professional fraud/AML casework. No employer code, customer data, internal documents,
 credentials, model API key or paid service is needed.
@@ -28,7 +28,7 @@ Python, FastAPI, PostgreSQL or SQLite, Alembic, Pydantic and a deterministic Lan
 Install Python 3.11+ and [uv](https://docs.astral.sh/uv/), then:
 
 ```sh
-uv sync --locked --extra ml
+uv sync --locked --all-extras
 uv run pytest -q
 uv run uvicorn investigation:create_app --factory --host 127.0.0.1 --port 8000
 ```
@@ -36,6 +36,39 @@ uv run uvicorn investigation:create_app --factory --host 127.0.0.1 --port 8000
 The server provides OpenAPI and Swagger documentation at `/docs`. Its factory creates
 and seeds `investigation.db` on startup. Stop it with Ctrl+C. To reset the demo, stop
 the server and remove that disposable database. Tests use isolated temporary databases.
+
+For hands-on endpoint exercises, follow [API_TESTING.md](API_TESTING.md): Swagger
+authorisation, investigation cutoffs, corrections, reviews, audit and expected error codes.
+
+### REST and GraphQL side by side
+
+The same server also exposes **Strawberry GraphQL at `/graphql`**, including a GraphiQL
+browser playground. Both interfaces call the same operations and share Pydantic validation,
+case access, evidence-history selection, LangGraph drafting and database transactions.
+GraphQL is a second interface, not a second implementation of investigation logic.
+
+| REST operation | GraphQL operation |
+| --- | --- |
+| `POST /cases/{case_id}/investigate` | Mutation `investigate(caseId, input)` |
+| `POST /cases/{case_id}/reviews` | Mutation `review(caseId, input)` |
+| `POST /cases/{case_id}/evidence/{evidence_id}/corrections` | Mutation `correctEvidence(caseId, evidenceId, input)` |
+| `GET /cases/{case_id}/audit` | Query `audit(caseId)` |
+
+Investigation is a **mutation** because it persists an audit snapshot. GraphQL lets clients
+select response fields, but the complete investigation still runs and is audited; selecting
+fewer fields does not weaken the evidence policy or reduce the underlying traversal.
+Use the same bearer header as REST. GraphQL uses camelCase field names, such as `asOf`,
+`maxHops` and `requiresHumanReview`. See [the GraphQL walkthrough](API_TESTING.md#graphql-walkthrough).
+
+Data operations use HTTP POST. The GET playground and schema introspection are public;
+every data resolver checks the demo identity. Resolver errors appear in `errors` (usually
+with HTTP 200), with `extensions.code` and `extensions.status`; check those rather than
+HTTP status alone. The flat schema has no arbitrary nested graph traversal. Requests are
+limited to depth 6, 5 aliases and 2,000 tokens; JSON batching is disabled. These are modest
+demo guardrails, not complete resource controls: audit pagination, rate/body-size limits,
+timeouts and production authentication are still needed. Mutations are individual
+transactions, not one atomic transaction for an entire multi-field GraphQL request.
+The stock GraphiQL browser assets load from a CDN and need an internet connection.
 
 ### PostgreSQL and migrations
 
@@ -140,7 +173,8 @@ caller-supplied synthetic metadata, not independently attested source provenance
 
 This is **not yet an LLM agent**. LangGraph currently executes one deterministic drafting
 node; it copies permitted source facts rather than generating conclusions. It has no
-arbitrary tool execution. There is no probabilistic entity resolution, RAG or risk score.
+arbitrary tool execution. There is no probabilistic entity resolution, RAG or risk score
+in this API. The separate Splink lab below does not change case evidence or merge entities.
 The graph is a tiny SQL-backed edge list rooted at synthetic account A, not a scalable
 graph database. Relationships are typed (`used_device`, `transferred_to`, `profile`),
 but entity types and direction-specific traversal policies are not yet enforced.
@@ -173,6 +207,41 @@ for discussing alert fatigue, false positives, missed cases, drift and challenge
 It is not a real temporal backtest: periods are independent simulations. No model is
 automatically promoted, and no claim of real fraud performance should be made.
 
+## 3. Entity-resolution lab (Splink + DuckDB)
+
+```sh
+uv run --extra entity python entity_resolution.py
+```
+
+Trains a Splink linkage model on **240 synthetic records for 120 labelled people**, then
+scores a separate **160 records for 80 held-out people**. Training and held-out person
+IDs are disjoint. Labels are supplied only for supervised training and final evaluation,
+never as inference inputs. Names, DOB, addresses and postcodes support matching; shared
+device IDs are deliberately excluded. Fixtures include spelling errors, initials, address
+changes, DOB errors and distinct people with similar names in the same household.
+
+Splink estimates `m` probabilities from matching training labels and `u` probabilities
+from seeded training-pair sampling. The prior comes from training duplicate prevalence.
+The pair budget covers this tiny training set, including a small fraction of real duplicate
+pairs; production u-estimation needs a much larger representative population. The simple
+generator and correlated attributes mean these probabilities are **not calibrated for real
+customers**. No EM training or unlabelled learning is claimed here.
+
+Candidate blocking uses matching DOB or surname plus postcode. The report compares fixed
+0.8/0.95/0.99 score thresholds, showing pair precision/recall, blocking recall, false-positive
+pair examples (named `false_merge_examples`) and missed duplicates. Recall includes duplicates
+that blocking failed to generate, rather than reporting inflated candidate-only recall.
+An example generated run at 0.95 scored 69 true-positive pairs, 10 false-positive pairs and
+11 missed duplicate pairs. Those mistakes are deliberately visible, not hidden or converted
+to confirmed identities. Thresholds are illustrative, not a recommendation or selected on
+the held-out labels; increasing a threshold does not guarantee better observed precision.
+
+This is **CLI-only**, with no API endpoint yet. It neither writes to the investigation
+database nor performs graph merges, clustering, reviewer overrides or customer actions.
+Next, build a reviewable candidate-link workflow that records accepted/rejected matches
+separately from evidence and fraud suspicion. Do not automatically treat predicted pair
+links as transitive identity clusters.
+
 ## Checks and small evaluation set
 
 ```sh
@@ -180,6 +249,11 @@ uv run pytest -q
 uv run ruff check .
 uv run ruff format --check .
 ```
+
+Install the optional `entity` extra (or use `uv run --all-extras pytest -q`) to include
+the Splink contract tests; otherwise that test module is skipped. The entity tests check
+pair metrics including blocked-out duplicates and verify that changing device IDs cannot
+change the matching scores.
 
 The API evaluation cases check: unavailable/future knowledge; late-arrival bridge
 blocking; 1/2/3-hop boundaries; freshness at exactly 7 days and one second later;
@@ -199,7 +273,7 @@ Each PostgreSQL test uses a unique schema, then drops it. Tests additionally cov
 historical replay after correction, the exact knowledge-time boundary, future-event
 supersession, competing edits, correction access, and legacy SQLite migration/restart.
 GitHub Actions runs these contracts on both SQLite and PostgreSQL 17, plus lint,
-formatting and the synthetic ML experiment. Without `TEST_DATABASE_URL`, local tests
+formatting and both synthetic experiments. Without `TEST_DATABASE_URL`, local tests
 run only SQLite; a passing SQLite run is not evidence of PostgreSQL compatibility.
 
 ## What to build next

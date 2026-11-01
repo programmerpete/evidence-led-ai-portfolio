@@ -8,4 +8,4 @@ if ! command -v pg_config >/dev/null || [ ! -x "$(pg_config --bindir)/postgres" 
 fi
 
 echo 'Installing locked Python dependencies'
-uv sync --locked --extra ml
+uv sync --locked --all-extras

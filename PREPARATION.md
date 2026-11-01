@@ -36,6 +36,11 @@ Current foundation: runnable API, reproducible late-arrival fixture, bounded tra
 cited source facts, explicit evidence states, demo case access, persisted human reviews,
 PostgreSQL/SQLite storage, Alembic migration, typed links, source/batch lineage and
 append-only corrections with historical replay and competing-edit protection.
+There is also a separate Splink/DuckDB lab with supervised training, held-out pair
+evaluation, blocking recall and explicit false-positive/missed-match examples.
+REST and Strawberry GraphQL now expose the same investigation, correction, review and
+audit operations, with shared validation and policies. GraphiQL is a developer playground,
+not the analyst-facing review UI described below.
 
 Next slices, in priority order:
 
@@ -45,10 +50,11 @@ Next slices, in priority order:
    are point assertions, not full valid-time intervals; API append-only history is not
    database-enforced immutability. Move case-history selection to bounded SQL queries
    before increasing dataset size. CI runs contracts against both storage engines.
-2. **Entity resolution:** use Splink on synthetic name/address variations with labelled
-   duplicate/nonduplicate pairs. Hold out labels; measure pair precision/recall and show
-   false merges. Never equate shared devices or addresses with confirmed same identity.
-   Keep match confidence, provenance and reviewer overrides separate from fraud suspicion.
+2. **Entity resolution (lab implemented):** Splink scores synthetic name/address variations
+   against held-out person labels and reports pair precision/recall, blocking misses and
+   false-positive pairs. Shared device IDs do not contribute to matching. Next persist
+   reviewable candidate links, model versions and reviewer accept/reject decisions;
+   never equate a score, shared device or address with confirmed identity or fraud.
 3. **Human review UI:** Next.js App Router screen showing evidence, cutoff, limitations,
    and source paths. Bind reviews to an investigation version and require a rationale.
    Demonstrate stale, denied and partial-source states, not just the happy path.

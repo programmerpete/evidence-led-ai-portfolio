@@ -26,10 +26,11 @@ jobs:
         with:
           version: "0.12.9"
           python-version: "3.11"
-      - run: uv sync --locked --extra ml
+      - run: uv sync --locked --all-extras
       - run: uv run ruff check .
       - run: uv run ruff format --check .
       - run: uv run pytest -q
         env:
           TEST_DATABASE_URL: postgresql+psycopg://portfolio:synthetic-ci-only@localhost:5432/portfolio_test
       - run: uv run --extra ml python fraud_signals.py
+      - run: uv run --extra entity python entity_resolution.py

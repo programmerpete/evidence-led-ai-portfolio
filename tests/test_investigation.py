@@ -241,3 +241,195 @@ def test_original_sqlite_database_upgrades_without_losing_facts_or_reviews(tmp_p
             assert item["description"] == "Existing custom synthetic fact."
             assert item["version"] == 1
             assert item["batch_id"] == "legacy-import"
+
+
+GQL_INVESTIGATE = """
+mutation Investigate($case: String!, $input: InvestigationInput!) {
+  investigate(caseId: $case, input: $input) {
+    caseId requiresHumanReview
+    findings { text citations }
+    evidence { id state description version knownAt sourceSystem batchId relationship eventTime }
+  }
+}
+"""
+GQL_CORRECT = """
+mutation Correct($case: String!, $evidence: String!, $input: CorrectionInput!) {
+  correctEvidence(caseId: $case, evidenceId: $evidence, input: $input) {
+    id version knownAt auditId
+  }
+}
+"""
+GQL_CORRECTION = {
+    "expectedVersion": 1,
+    "source": "account-a",
+    "target": "device-x",
+    "relationship": "used_device",
+    "description": "Corrected synthetic observation using GraphQL.",
+    "eventTime": "2026-10-20T09:00:00Z",
+    "sourceSystem": "synthetic-graphql",
+    "batchId": "graphql-demo-002",
+    "reason": "Reconciled against the synthetic source.",
+}
+
+
+@pytest.mark.parametrize(
+    "cutoff,hops,expected",
+    [
+        ("2026-10-21T12:00:00Z", 3, {"E-001"}),
+        ("2026-10-22T12:00:00Z", 3, {"E-001", "E-002", "E-003"}),
+        ("2026-10-22T12:00:00Z", 1, {"E-001"}),
+        ("2026-10-30T00:00:00Z", 3, set()),
+    ],
+)
+def test_graphql_investigation_matches_rest_and_audits_full_snapshot(
+    client, cutoff, hops, expected
+):
+    body = client.post(
+        "/graphql",
+        json={
+            "query": GQL_INVESTIGATE,
+            "variables": {"case": "CASE-001", "input": {"asOf": cutoff, "maxHops": hops}},
+        },
+    ).json()
+    assert "errors" not in body
+    result = body["data"]["investigate"]
+    assert result["requiresHumanReview"] is True
+    assert {ref for fact in result["findings"] for ref in fact["citations"]} == expected
+    assert "Restricted synthetic profile details" not in str(result)
+    denied = next(item for item in result["evidence"] if item["id"] == "E-004")
+    assert denied["state"] == "denied"
+    assert denied["knownAt"] is None
+    rest = client.post(
+        "/cases/CASE-001/investigate", json={"as_of": cutoff, "max_hops": hops}
+    ).json()
+    assert result["findings"] == rest["findings"]
+    assert [(e["id"], e["state"]) for e in result["evidence"]] == [
+        (e["id"], e["state"]) for e in rest["evidence"]
+    ]
+    audit = client.post(
+        "/graphql", json={"query": '{ audit(caseId: "CASE-001") { action payload actor } }'}
+    ).json()["data"]["audit"]
+    assert len(audit) == 2
+    assert all(event["action"] == "investigation" for event in audit)
+    assert audit[0]["actor"] == "analyst-a"
+    assert audit[0]["payload"] == rest  # Full snapshot even though selection omitted limitations.
+    assert "limitations" not in result
+
+
+@pytest.mark.parametrize(
+    "operation",
+    [
+        'query { audit(caseId: "CASE") { id } }',
+        'mutation { investigate(caseId: "CASE", input: {asOf: "2026-10-22T12:00:00Z"}) {caseId} }',
+        'mutation { review(caseId: "CASE", input: {decision: "close", rationale: "Synthetic review."}) {actor} }',
+        """mutation { correctEvidence(caseId: "CASE", evidenceId: "E-001", input: {
+          expectedVersion: 1, source: "account-a", target: "device-x", relationship: "used_device",
+          description: "Synthetic correction.", eventTime: "2026-10-20T09:00:00Z",
+          sourceSystem: "synthetic", batchId: "test-002", reason: "Synthetic reconciliation."
+        }) {version} }""",
+    ],
+)
+def test_graphql_access_on_every_operation(client, operation):
+    missing = client.post("/graphql", json={"query": operation.replace("CASE", "CASE-002")}).json()
+    assert missing["data"] is None
+    assert missing["errors"][0]["extensions"] == {"code": "NOT_FOUND", "status": 404}
+    assert client.get("/cases/CASE-001/audit").json() == []
+    client.headers.pop("Authorization")
+    unauthenticated = client.post(
+        "/graphql", json={"query": operation.replace("CASE", "CASE-001")}
+    ).json()
+    assert unauthenticated["data"] is None
+    assert unauthenticated["errors"][0]["extensions"]["code"] == "UNAUTHENTICATED"
+
+
+def test_graphql_correction_replay_conflict_and_review_share_rest_history(client):
+    payload = {
+        "query": GQL_CORRECT,
+        "variables": {"case": "CASE-001", "evidence": "E-001", "input": GQL_CORRECTION},
+    }
+    response = client.post("/graphql", json=payload).json()
+    assert "errors" not in response
+    corrected = response["data"]["correctEvidence"]
+    assert corrected["version"] == 2
+    assert client.post(CORRECTION_URL, json=CORRECTION).status_code == 409
+    conflict = client.post("/graphql", json=payload).json()
+    assert conflict["errors"][0]["extensions"]["code"] == "CONFLICT"
+    for cutoff, version in [("2026-10-22T12:00:00Z", 1), (corrected["knownAt"], 2)]:
+        result = client.post(
+            "/cases/CASE-001/investigate", json={"as_of": cutoff, "max_hops": 3}
+        ).json()
+        item = next(item for item in result["evidence"] if item["id"] == "E-001")
+        assert item["version"] == version
+    review = client.post(
+        "/graphql",
+        json={
+            "query": """mutation { review(caseId: "CASE-001", input: {
+          decision: "request_information", rationale: "Verify synthetic shared device lead."
+        }) { actor decision auditId } }"""
+        },
+    ).json()
+    assert "errors" not in review
+    assert review["data"]["review"]["actor"] == "analyst-a"
+    audit = client.get("/cases/CASE-001/audit").json()
+    assert [event["action"] for event in audit] == [
+        "evidence_correction",
+        "investigation",
+        "investigation",
+        "human_review",
+    ]
+    assert audit[0]["payload"]["source_system"] == "synthetic-graphql"
+    assert audit[-1]["id"] == review["data"]["review"]["auditId"]
+    for evidence_id in ["E-004", "missing"]:
+        denied = client.post(
+            "/graphql",
+            json={**payload, "variables": {**payload["variables"], "evidence": evidence_id}},
+        ).json()
+        assert denied["errors"][0]["extensions"]["code"] == "NOT_FOUND"
+
+
+@pytest.mark.parametrize(
+    "input",
+    [
+        {"asOf": "2026-10-22T12:00:00"},
+        {"asOf": "2026-10-22T12:00:00Z", "maxHops": 4},
+        {"asOf": "2026-10-22T12:00:00Z", "maxHops": 0},
+    ],
+)
+def test_graphql_preserves_request_boundaries(client, input):
+    body = client.post(
+        "/graphql",
+        json={"query": GQL_INVESTIGATE, "variables": {"case": "CASE-001", "input": input}},
+    ).json()
+    assert body["errors"][0]["extensions"]["code"] == "BAD_USER_INPUT"
+    assert client.get("/cases/CASE-001/audit").json() == []
+
+
+def test_graphql_rejects_invalid_writes_and_excess_aliases_without_side_effects(client):
+    invalid = client.post(
+        "/graphql",
+        json={
+            "query": """mutation { review(caseId: "CASE-001", input: {
+          decision: "freeze_account", rationale: "Invalid synthetic decision."
+        }) { auditId } }"""
+        },
+    ).json()
+    assert invalid["errors"][0]["extensions"]["code"] == "BAD_USER_INPUT"
+    payload = {
+        "query": GQL_CORRECT,
+        "variables": {
+            "case": "CASE-001",
+            "evidence": "E-001",
+            "input": {**GQL_CORRECTION, "knownAt": "2020-01-01T00:00:00Z"},
+        },
+    }
+    assert client.post("/graphql", json=payload).json()["errors"]
+    repeated = (
+        "mutation {"
+        + " ".join(
+            f'a{i}: review(caseId: "CASE-001", input: {{decision: "close", rationale: "Synthetic review."}}) {{auditId}}'
+            for i in range(6)
+        )
+        + "}"
+    )
+    assert client.post("/graphql", json={"query": repeated}).json()["errors"]
+    assert client.get("/cases/CASE-001/audit").json() == []

@@ -10,11 +10,17 @@ dependencies = [
     "sqlalchemy>=2,<3",
     "alembic>=1.14,<2",
     "psycopg[binary]>=3.2,<4",
+    "strawberry-graphql[fastapi]>=0.339,<1",
 ]
 
 [project.optional-dependencies]
 ml = [
     "scikit-learn>=1.5,<2",
+]
+entity = [
+    "duckdb>=1,<2",
+    "pandas>=2.2,<4",
+    "splink>=4,<5",
 ]
 
 [dependency-groups]
