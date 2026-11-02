@@ -5,6 +5,90 @@ For your own local checkout, start the server using README.md and open its `/doc
 All examples below are synthetic and safe to experiment with. The demo bearer identities
 are public teaching values, not secure logins. Do not upload real bank or customer data.
 
+## Analyst workbench walkthrough
+
+Open `/analyst` on the same server, or use the analyst portal shared in this thread.
+
+1. Keep demo analyst A, `CASE-001`, UTC cutoff `2026-10-22T12:00` and 3 hops.
+2. Start a run. It should show **Awaiting review**, a run ID, cited E-001–E-003 facts,
+   denied E-004 and an unavailable watchlist. The workflow is paused at a persisted
+   LangGraph human-review checkpoint, not running an LLM in the background. Model
+   advice is off unless explicitly selected for a new run.
+3. Reload the page or reopen that run from the recent list. Its evidence is unchanged.
+4. Choose a decision and enter a rationale of at least 10 characters. Submit the review.
+   Status should become **Reviewed**, with reviewer, rationale and recording time.
+5. Reload again: the recorded review survives. It cannot be replaced by a different
+   decision; a new investigation snapshot requires a new run and review.
+6. Start a run at UTC October 30: stale evidence produces no current supporting facts.
+   At UTC October 19, graph evidence is unknown. Limitations remain visible in both.
+7. Try `CASE-002` as analyst A: access is denied. Switching analyst/case clears the
+   previously displayed snapshot so it cannot be mistaken for the new case's result.
+
+If a review was saved but graph resume was interrupted, **Resume pending** shows the
+saved decision and a retry action. Retry exactly that review, not a new one. A failed
+start request should be followed by loading recent runs before deciding to start again;
+start requests themselves are not idempotent. Decisions never block accounts or file reports.
+
+### Run operations in GraphiQL
+
+Use the same bearer header as the GraphQL walkthrough below:
+
+```graphql
+mutation StartRun {
+  startRun(caseId: "CASE-001", input: {
+    asOf: "2026-10-22T12:00:00Z", maxHops: 3
+  }) { id status investigation { findings { text citations } limitations } }
+}
+```
+
+Copy its `id` into the `runId` argument (replace the placeholder, not the case ID):
+
+```graphql
+mutation ReviewRun {
+  reviewRun(caseId: "CASE-001", runId: "PASTE-RUN-ID", input: {
+    decision: "request_information"
+    rationale: "Verify the synthetic shared device lead before escalation."
+  }) { id status reviewer reviewDecision reviewRationale reviewedAt }
+}
+```
+
+`query { runs(caseId: "CASE-001") { id status } }` lists the most recent 20 runs.
+`query { run(caseId: "CASE-001", runId: "PASTE-RUN-ID") { id status } }` is read-only.
+Legacy `review` and REST `/reviews` do **not** resume a run; use `reviewRun` for that.
+
+### Request an AI recommendation
+
+Configure the server's provider/model/key using README.md, then select **Include AI
+recommendation** and start a new run. This may incur provider charges. The model panel
+shows a suggestion, rationale, citations and gaps, separately from the human review.
+It must not prefill your decision. Reloading an existing run does not call the model again.
+
+In GraphiQL, use the demo bearer header and run:
+
+```graphql
+mutation AssistedRun {
+  startRun(caseId: "CASE-001", input: {
+    asOf: "2026-10-22T12:00:00Z", maxHops: 3, requestAdvice: true
+  }) {
+    id status
+    investigation {
+      requiresHumanReview
+      modelAssessment {
+        status provider model promptVersion message
+        advice { decision rationale citations gaps }
+      }
+    }
+  }
+}
+```
+
+Expected: `awaiting_review` regardless of the model's suggestion. If configured and the
+output passes schema/citation validation, assessment status is `completed`; otherwise
+it is `unavailable`, with no advice. This is not an accuracy or fraud-detection verdict.
+At the October 30 stale cutoff, no request is sent because no available evidence supports
+a recommendation. REST `/cases/CASE-001/investigate` accepts `request_advice: true` and
+returns `model_assessment`, but only `startRun` creates a resumable review workflow.
+
 ## Swagger UI walkthrough
 
 1. Click **Authorize** near the top, enter `demo-analyst-a` (without `Bearer `), click
@@ -189,7 +273,8 @@ REST status in `extensions.status`. Syntax, schema, variable coercion and reques
 errors are GraphQL errors too, but do not necessarily have these extension codes.
 Do not assume HTTP 200 means success. Failed validation/access checks do not write audit
 events. Multiple mutations are not atomic together: earlier successful fields may already
-be committed if a later field fails. Repeated successful reviews create more records.
+be committed if a later field fails. Repeated successful legacy `review` mutations create
+more records; an identical `reviewRun` retry does not create another decision.
 
 ## Automated checks
 

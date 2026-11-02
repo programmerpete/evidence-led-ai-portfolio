@@ -8,6 +8,7 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 class InvestigationRequest(BaseModel):
     as_of: AwareDatetime
     max_hops: int = Field(default=2, ge=1, le=3)
+    request_advice: bool = False
 
 
 class Evidence(BaseModel):
@@ -27,6 +28,24 @@ class Finding(BaseModel):
     citations: list[str]
 
 
+class ModelAdvice(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    decision: Literal["escalate", "close", "request_information"]
+    rationale: str = Field(min_length=10, max_length=2000, pattern=r"\S")
+    citations: list[str] = Field(min_length=1, max_length=30)
+    gaps: list[str] = Field(max_length=20)
+
+
+class ModelAssessment(BaseModel):
+    status: Literal["completed", "unavailable"]
+    provider: str | None = None
+    model: str | None = None
+    prompt_version: str = "analyst-advice-v1"
+    advice: ModelAdvice | None = None
+    message: str | None = None
+
+
 class Investigation(BaseModel):
     case_id: str
     as_of: AwareDatetime
@@ -34,11 +53,24 @@ class Investigation(BaseModel):
     findings: list[Finding]
     limitations: list[str]
     requires_human_review: Literal[True] = True
+    model_assessment: ModelAssessment | None = None
 
 
 class Review(BaseModel):
     decision: Literal["escalate", "close", "request_information"]
     rationale: str = Field(min_length=10, max_length=2000, pattern=r"\S")
+
+
+class InvestigationRun(BaseModel):
+    id: str
+    case_id: str
+    status: Literal["awaiting_review", "review_pending", "reviewed"]
+    created_at: AwareDatetime
+    reviewed_at: AwareDatetime | None
+    reviewer: str | None
+    review_decision: str | None
+    review_rationale: str | None
+    investigation: Investigation
 
 
 class Correction(BaseModel):

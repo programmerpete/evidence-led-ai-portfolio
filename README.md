@@ -5,7 +5,8 @@ AI portfolio in the fraud space
 Three runnable, synthetic-only portfolio labs for a hands-on banking AI engineering role.
 These are learning labs, **not production banking systems**, compliance advice, or evidence
 of professional fraud/AML casework. No employer code, customer data, internal documents,
-credentials, model API key or paid service is needed.
+credentials, model API key or paid service is needed for the default workflow.
+Optional model advice requires a server-side provider key and may incur cost.
 
 ## 1. Fraud investigation assistant — backend foundation
 
@@ -69,6 +70,89 @@ demo guardrails, not complete resource controls: audit pagination, rate/body-siz
 timeouts and production authentication are still needed. Mutations are individual
 transactions, not one atomic transaction for an entire multi-field GraphQL request.
 The stock GraphiQL browser assets load from a CDN and need an internet connection.
+
+### Analyst workbench and durable human review
+
+Open `/analyst` on the same server. This lightweight, dependency-free browser UI uses
+GraphQL; it is not yet a Next.js/React application. Choose a demo analyst and case, then
+start a run. The fixed default cutoff is UTC October 22, 2026, not the current date.
+
+`startRun(caseId, input)` collects permitted evidence, runs deterministic cited-fact
+drafting, persists a real LangGraph `interrupt()` checkpoint at `human_review`, and returns
+a run ID with status `awaiting_review`. Drafting and any requested model advice finish
+within the request; there is **no background worker or job queue**. The default performs
+no model call. `run(caseId, runId)` reloads a frozen snapshot;
+`runs(caseId)` returns the 20 most recent runs. Creating another run is an explicit action,
+not an idempotent operation; don't automatically retry start requests after a lost response.
+
+`reviewRun(caseId, runId, input)` records the reviewer, decision and rationale against
+that exact snapshot, then resumes the graph with `Command(resume=...)`. Status becomes
+`reviewed` only after the checkpoint confirms the saved review and graph completion.
+Later evidence corrections do not alter a saved run. Repeating the same review is safe;
+a different review for an already-claimed run returns `CONFLICT`. This is one review per
+snapshot, not four-eyes approval, and the demo identity may review a run it started.
+
+The decision and its audit event commit together **before** graph resume. If execution is
+interrupted, status remains `review_pending`: retry the same recorded decision to recover,
+without another human-review event. Checkpoint writes and run/audit transactions are not
+one distributed transaction. A failure during run creation can leave an unreferenced
+checkpoint, and no automatic recovery worker or orphan cleanup is implemented.
+
+Alembic migration `0002` adds run records. The official LangGraph `SqliteSaver` or
+`PostgresSaver` manages its own checkpoint tables in the **same database/schema**, with
+plain JSON-compatible workflow state. These checkpoint tables are library-managed, not
+Alembic-managed; the demo database role needs their setup permissions too. Back up both
+run/evidence/audit and checkpoint tables before upgrading. Tests exercise both stores,
+restart/resume, interruptions before/after resume, and competing decisions.
+
+“Reviewed” completes this workflow snapshot; it does not close a case, block an account
+or file a report. `requiresHumanReview` remains true on the original investigation draft;
+the run's separate status records that the requirement was satisfied.
+
+### Optional model decision support
+
+OpenAI supports structured recommendations directly; OpenRouter can route requests to
+OpenAI or another compatible model. This is a general-purpose LLM assistant, **not a
+trained or validated fraud decision model**. It recommends `escalate`, `close`, or
+`request_information` with a short rationale, evidence IDs and gaps. It does not output
+a fraud probability, replace the analyst, or execute customer actions.
+
+Configure server-side variables before starting the service:
+
+| Variable | OpenAI directly | OpenRouter |
+| --- | --- | --- |
+| `DECISION_PROVIDER` | `openai` (default) | `openrouter` |
+| `DECISION_MODEL` | A structured-output model ID, e.g. `gpt-4.1-mini` | e.g. `openai/gpt-4.1-mini` |
+| Secret key | `OPENAI_API_KEY` | `OPENROUTER_API_KEY` |
+
+Store the key in your secret manager or Amp Settings, never in source, browser storage,
+or chat. Restart the service after changing configuration. The provider is selected
+explicitly; there is no automatic switch from OpenAI to OpenRouter or retry on failure.
+OpenRouter requires parameter support and disables provider fallback for these requests.
+
+Check **Include AI recommendation** before starting a new run, or send
+`requestAdvice: true` in GraphQL (`request_advice: true` in REST). The durable run graph
+drafts facts, optionally requests model advice, then pauses for human review. Advice and
+the configured provider/model/prompt version are frozen with the run and its start audit;
+reload and normal human-review resume do not regenerate advice. Existing saved runs
+without this field continue to load. Legacy investigations return/audit the same optional
+assessment, but do not create a resumable run.
+
+Only available permitted evidence content is sent externally, alongside source IDs/states,
+cutoff and limitations. Non-available descriptions and metadata are excluded. Calls have
+a 40,000-character input budget, 2,048-token completion budget and 30-second HTTP timeout.
+Missing configuration, no supporting evidence, provider errors/refusals, truncated or
+invalid JSON, and invented/non-available citations yield **unavailable** advice. The
+deterministic evidence and human review remain usable. An unavailable assessment is
+frozen too; requesting advice again requires a new run and may incur another charge.
+
+Schema/citation validation checks structure and evidence membership, **not the truth of
+the rationale or resistance to prompt injection**. The UI never prefills the human decision.
+Tests use a simulated provider to cover both APIs, invalid responses and recovery; real
+model quality requires a labelled evaluation set, abstention metrics, injection testing
+and independent review before any operational use. Demo bearer identities are public;
+do not expose a paid model-enabled service publicly without real authentication, rate
+limits, spending controls and an approved data-processing policy. Use synthetic data only.
 
 ### PostgreSQL and migrations
 
@@ -171,8 +255,9 @@ caller-supplied synthetic metadata, not independently attested source provenance
 
 ### Deliberate boundaries
 
-This is **not yet an LLM agent**. LangGraph currently executes one deterministic drafting
-node; it copies permitted source facts rather than generating conclusions. It has no
+This is **not an autonomous decision agent**. Source-fact drafting remains deterministic;
+optional model advice is separate from these facts and from the human decision. The run
+workflow persists that advice before its durable human-review interrupt. The system has no
 arbitrary tool execution. There is no probabilistic entity resolution, RAG or risk score
 in this API. The separate Splink lab below does not change case evidence or merge entities.
 The graph is a tiny SQL-backed edge list rooted at synthetic account A, not a scalable
@@ -183,8 +268,9 @@ older evidence can still matter in real investigations. Historical cutoffs filte
 not historical access entitlements. Replays assume unchanged access and freshness policy;
 they are evidence-history replays, not versioned application/model/policy replays.
 
-Reviews are attributed records, not a full case lifecycle or approvals system: they are
-not tied to a selected investigation version and do not close/block accounts or file reports.
+Legacy case-level reviews remain attributed records with no selected investigation version.
+The new `reviewRun` operation instead binds a review to a frozen run and resumes its graph.
+Neither interface provides a full case lifecycle or closes/blocks accounts or files reports.
 Audit is append-only through this API, **not tamper-proof storage**. Failed/denied requests
 are not audited yet. Real deployments also need SSO, purpose-based entitlements,
 retention controls, monitoring, rate/resource limits, and independent security review.

@@ -38,6 +38,24 @@ class FindingResult:
     citations: list[str]
 
 
+@strawberry.type(name="ModelAdvice")
+class AdviceResult:
+    decision: str
+    rationale: str
+    citations: list[str]
+    gaps: list[str]
+
+
+@strawberry.type(name="ModelAssessment")
+class AssessmentResult:
+    status: str
+    provider: str | None
+    model: str | None
+    prompt_version: str
+    advice: AdviceResult | None
+    message: str | None
+
+
 @strawberry.type(name="Investigation")
 class InvestigationResult:
     case_id: str
@@ -46,12 +64,49 @@ class InvestigationResult:
     findings: list[FindingResult]
     limitations: list[str]
     requires_human_review: bool
+    model_assessment: AssessmentResult | None
+
+
+def investigation_result(result):
+    assessment = result.model_assessment
+    return InvestigationResult(
+        **result.model_dump(exclude={"evidence", "findings", "model_assessment"}),
+        evidence=[EvidenceResult(**item.model_dump()) for item in result.evidence],
+        findings=[FindingResult(**item.model_dump()) for item in result.findings],
+        model_assessment=AssessmentResult(
+            **assessment.model_dump(exclude={"advice"}),
+            advice=AdviceResult(**assessment.advice.model_dump()) if assessment.advice else None,
+        )
+        if assessment
+        else None,
+    )
+
+
+@strawberry.type(name="InvestigationRun")
+class RunResult:
+    id: str
+    case_id: str
+    status: str
+    created_at: datetime
+    reviewed_at: datetime | None
+    reviewer: str | None
+    review_decision: str | None
+    review_rationale: str | None
+    investigation: InvestigationResult
+
+
+def run_result(result):
+    return RunResult(
+        **result.model_dump(exclude={"investigation"}),
+        investigation=investigation_result(result.investigation),
+    )
 
 
 @strawberry.input
 class InvestigationInput:
     as_of: datetime
     max_hops: int = 2
+    request_advice: bool = False
 
 
 @strawberry.input
@@ -119,7 +174,7 @@ def graphql_errors():
         ) from error
 
 
-def create_graphql_router(investigate, correct, review, get_audit, actor, bearer):
+def create_graphql_router(investigate, correct, review, get_audit, actor, bearer, runs):
     # Leave the IDE public; authenticate every data operation using the REST identity policy.
     def context(
         credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)],
@@ -128,6 +183,22 @@ def create_graphql_router(investigate, correct, review, get_audit, actor, bearer
 
     @strawberry.type
     class Query:
+        @strawberry.field
+        async def run(self, info: Info, case_id: str, run_id: str) -> RunResult:
+            with graphql_errors():
+                result = await run_in_threadpool(
+                    runs.get, case_id, run_id, actor(info.context["credentials"])
+                )
+                return run_result(result)
+
+        @strawberry.field
+        async def runs(self, info: Info, case_id: str) -> list[RunResult]:
+            with graphql_errors():
+                result = await run_in_threadpool(
+                    runs.list, case_id, actor(info.context["credentials"])
+                )
+                return [run_result(item) for item in result]
+
         @strawberry.field
         async def audit(self, info: Info, case_id: str) -> list[AuditEvent]:
             with graphql_errors():
@@ -142,6 +213,24 @@ def create_graphql_router(investigate, correct, review, get_audit, actor, bearer
 
     @strawberry.type
     class Mutation:
+        @strawberry.mutation
+        async def start_run(self, info: Info, case_id: str, input: InvestigationInput) -> RunResult:
+            with graphql_errors():
+                identity = actor(info.context["credentials"])
+                request = InvestigationRequest.model_validate(asdict(input))
+                result = await run_in_threadpool(runs.start, case_id, request, identity)
+                return run_result(result)
+
+        @strawberry.mutation
+        async def review_run(
+            self, info: Info, case_id: str, run_id: str, input: ReviewInput
+        ) -> RunResult:
+            with graphql_errors():
+                identity = actor(info.context["credentials"])
+                request = Review.model_validate(asdict(input))
+                result = await run_in_threadpool(runs.review, case_id, run_id, request, identity)
+                return run_result(result)
+
         @strawberry.mutation(description="Run an investigation and persist its audit snapshot.")
         async def investigate(
             self, info: Info, case_id: str, input: InvestigationInput
@@ -150,11 +239,7 @@ def create_graphql_router(investigate, correct, review, get_audit, actor, bearer
                 identity = actor(info.context["credentials"])
                 request = InvestigationRequest.model_validate(asdict(input))
                 result = await run_in_threadpool(investigate, case_id, request, identity)
-                return InvestigationResult(
-                    **result.model_dump(exclude={"evidence", "findings"}),
-                    evidence=[EvidenceResult(**item.model_dump()) for item in result.evidence],
-                    findings=[FindingResult(**item.model_dump()) for item in result.findings],
-                )
+                return investigation_result(result)
 
         @strawberry.mutation
         async def review(self, info: Info, case_id: str, input: ReviewInput) -> ReviewResult:

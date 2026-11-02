@@ -1,0 +1,408 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Analyst review · Synthetic investigation</title>
+  <style>
+    :root { font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #243447; background: #f3f5f7; line-height: 1.55; --accent: #087f79; --muted: #58697b; --line: #dce3e9; }
+    * { box-sizing: border-box; }
+    body { margin: 0; }
+    button, input, select, textarea { font: inherit; }
+    button, input, select, textarea, a { -webkit-tap-highlight-color: transparent; }
+    :focus-visible { outline: 3px solid #0b8c85; outline-offset: 3px; }
+    a { color: #086e69; }
+    button { cursor: pointer; border: 1px solid #bac7d1; border-radius: 6px; padding: .58rem .9rem; color: #243447; background: white; font-weight: 650; }
+    button:hover:not(:disabled) { background: #edf6f5; border-color: var(--accent); }
+    button.primary { background: var(--accent); border-color: var(--accent); color: white; }
+    button.primary:hover:not(:disabled) { background: #076b66; }
+    button:disabled { opacity: .55; cursor: not-allowed; }
+    input, select, textarea { border: 1px solid #aebbc7; border-radius: 5px; padding: .58rem .65rem; background: white; color: #243447; width: 100%; min-width: 0; }
+    input[type="checkbox"] { width: auto; }
+    input:disabled, select:disabled, textarea:disabled { background: #f0f3f5; color: #58697b; }
+    textarea { min-height: 130px; resize: vertical; }
+    label { display: block; font-weight: 650; font-size: .85rem; margin-bottom: .35rem; }
+    h1, h2, h3, p { margin-top: 0; }
+    h1 { font-size: 1.8rem; letter-spacing: -.045em; margin-bottom: .35rem; line-height: 1.25; }
+    h2 { font-size: 1.08rem; letter-spacing: -.02em; margin-bottom: .25rem; }
+    h3 { font-size: .95rem; margin-bottom: .55rem; }
+    p { margin-bottom: .8rem; }
+    small, .small { font-size: .8rem; }
+    .muted { color: var(--muted); }
+    .mono { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; overflow-wrap: anywhere; }
+    .eyebrow { text-transform: uppercase; letter-spacing: .14em; font-size: .68rem; font-weight: 750; color: #08736d; margin-bottom: .6rem; }
+    .topbar { background: #fff; border-bottom: 1px solid var(--line); }
+    .topbar > div { max-width: 1440px; margin: auto; padding: 1rem 2rem; display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+    .brand { font-weight: 750; letter-spacing: -.025em; }
+    .brand span { color: var(--accent); margin-right: .55rem; }
+    .badge { display: inline-flex; align-items: center; font-size: .72rem; padding: .2rem .55rem; border-radius: 4px; background: #edf3f5; color: #435668; font-weight: 650; white-space: nowrap; }
+    .badge.teal { color: #056760; background: #e0f2ee; }
+    main { max-width: 1440px; padding: 2rem; margin: auto; }
+    .intro { display: flex; justify-content: space-between; align-items: flex-start; gap: 2rem; margin-bottom: 1.4rem; }
+    .intro p { margin-bottom: 0; max-width: 700px; }
+    .panel { background: white; border: 1px solid var(--line); border-radius: 9px; box-shadow: 0 2px 3px #23344603; }
+    .controls { padding: 1.2rem 1.4rem; margin-bottom: .8rem; }
+    .control-grid { display: grid; grid-template-columns: 1.2fr 1fr 1.5fr .6fr auto; gap: 1rem; align-items: end; }
+    .case-field { display: flex; gap: .4rem; }
+    .case-field button { padding-inline: .65rem; }
+    .notice { margin-top: .8rem; margin-bottom: 0; font-size: .78rem; color: var(--muted); }
+    .feedback { min-height: 2.2rem; margin-bottom: .5rem; font-size: .87rem; }
+    #error:not(:empty) { border-left: 3px solid #b54c39; background: #fff1ec; color: #863623; padding: .8rem 1rem; margin-bottom: .8rem; overflow-wrap: anywhere; }
+    #progress { color: #076c66; }
+    .layout { display: grid; grid-template-columns: 255px minmax(0, 1fr); gap: 1.3rem; align-items: start; }
+    .section-head { padding: 1.15rem 1.3rem; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; gap: .8rem; }
+    .section-head p { margin: .15rem 0 0; }
+    #reload { font-size: .78rem; padding: .4rem .6rem; }
+    #run-list { padding: .65rem; display: grid; gap: .5rem; max-height: 660px; overflow-y: auto; }
+    .run-item { display: block; width: 100%; text-align: left; padding: .85rem; background: #fff; border: 1px solid transparent; font-weight: 400; }
+    .run-item[aria-current="true"] { border-color: #72b4ae; background: #edf8f5; box-shadow: inset 3px 0 var(--accent); }
+    .run-item .mono { display: block; font-size: .78rem; margin: .5rem 0 .25rem; }
+    .run-item time { font-size: .74rem; color: var(--muted); }
+    .sidebar-note { padding: 1rem 1.3rem; font-size: .76rem; border-top: 1px solid var(--line); color: var(--muted); }
+    .empty { padding: 3.5rem 2rem; text-align: center; color: var(--muted); }
+    .empty h2 { color: #243447; margin-bottom: .6rem; }
+    .sidebar-empty { padding: 1rem; font-size: .85rem; }
+    .content { padding: 1.3rem; }
+    .metadata { display: grid; grid-template-columns: 1fr 1fr; gap: .8rem 2rem; margin: 0; }
+    dt { font-size: .73rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+    dd { margin: .2rem 0 0; font-size: .88rem; overflow-wrap: anywhere; }
+    .workflow { display: flex; list-style: none; padding: 0; margin: 1.3rem 0 0; gap: .5rem; }
+    .workflow li { flex: 1; padding: .7rem; background: #f1f4f6; border-radius: 5px; font-size: .8rem; color: #58697b; }
+    .workflow li:not(:last-child)::after { content: ' →'; float: right; }
+    .workflow li[aria-current="step"] { color: #066b65; background: #e0f2ee; box-shadow: inset 0 -2px var(--accent); font-weight: 700; }
+    .subsection { margin-top: 1.5rem; border-top: 1px solid var(--line); padding-top: 1.2rem; }
+    .facts { padding-left: 1.3rem; margin-bottom: 0; }
+    .facts > li { padding-left: .3rem; margin-bottom: 1rem; }
+    .facts p { margin-bottom: .35rem; font-size: .92rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .citations { display: flex; gap: .45rem; flex-wrap: wrap; font-size: .75rem; }
+    .citations a { background: #edf5f4; border-radius: 4px; padding: .15rem .4rem; overflow-wrap: anywhere; }
+    .evidence-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .8rem; }
+    .evidence-card { border: 1px solid var(--line); border-radius: 6px; padding: 1rem; scroll-margin-top: 1rem; }
+    .evidence-card .card-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: .5rem; margin-bottom: .6rem; }
+    .evidence-card p { font-size: .85rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .evidence-card dl { display: grid; grid-template-columns: 1fr 1fr; gap: .65rem; margin: 0; }
+    .evidence-card dt { font-size: .65rem; }
+    .evidence-card dd { font-size: .75rem; }
+    .limitations { padding: 1rem 1.2rem; background: #f3f6f8; border-left: 3px solid #8395a5; border-radius: 3px; margin-top: 1.3rem; }
+    .limitations ul { padding-left: 1.2rem; margin: .5rem 0 0; font-size: .87rem; }
+    .limitations li { white-space: pre-wrap; overflow-wrap: anywhere; margin-bottom: .4rem; }
+    .review-panel { margin-top: 1.3rem; }
+    .review-grid { display: grid; grid-template-columns: 230px 1fr; gap: 1.2rem; }
+    .review-actions { display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin-top: 1rem; }
+    .review-actions p { margin: 0; max-width: 620px; }
+    .review-summary { background: #f2f7f6; padding: 1rem; border-radius: 5px; margin-bottom: 1rem; }
+    .review-summary p { margin-bottom: .4rem; font-size: .88rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .step-help { background: #f5f8f8; border: 1px solid #dce7e4; border-radius: 6px; padding: .7rem .85rem; margin: .9rem 0; font-size: .83rem; color: var(--muted); }
+    .step-help summary { cursor: pointer; font-weight: 650; color: #086e69; }
+    .step-help summary:hover { color: #064f4b; }
+    .step-help p { margin: .65rem 0 0; }
+    .step-help ul { padding-left: 1.2rem; margin: .6rem 0 0; }
+    .step-help li { margin-bottom: .4rem; }
+    .step-help strong { color: #34495a; }
+    .sidebar-help { margin: .8rem .65rem; }
+    .help { margin-top: 1.5rem; color: var(--muted); font-size: .83rem; }
+    .help summary { cursor: pointer; font-weight: 650; color: #34495a; }
+    .help p { margin: .7rem 0 0; max-width: 960px; }
+    [hidden] { display: none !important; }
+    @media (max-width: 1050px) { .control-grid { grid-template-columns: 1fr 1fr; } .control-grid > button { justify-self: start; } .layout { grid-template-columns: 220px minmax(0, 1fr); } .evidence-grid, .review-grid { grid-template-columns: 1fr; } }
+    @media (max-width: 700px) { main { padding: 1.2rem 1rem; } .topbar > div { padding: .9rem 1rem; } .intro { display: block; } .layout { grid-template-columns: 1fr; } #run-list { max-height: 240px; } .control-grid { grid-template-columns: 1fr; } .metadata { grid-template-columns: 1fr; } .review-actions { align-items: flex-start; flex-direction: column; } .workflow li { padding: .6rem .4rem; font-size: .72rem; } h1 { font-size: 1.6rem; } }
+  </style>
+</head>
+<body>
+  <header class="topbar"><div><div class="brand"><span aria-hidden="true">◈</span> Investigation workbench</div><span class="badge">Synthetic data only</span></div></header>
+  <main>
+    <div class="intro"><div><p class="eyebrow">Analyst workspace / persisted investigations</p><h1>Evidence first. Human decision.</h1><p class="muted">Explore a frozen investigation, inspect its sources, and record a review. This public portfolio demo uses synthetic identities and evidence—not production authentication or proof of fraud. Open “Behind this step” in each section to see what the system does and what to check.</p></div></div>
+    <form id="scope-form" class="panel controls" aria-label="Investigation setup">
+      <div class="control-grid">
+        <div><label for="identity">Demo analyst</label><select id="identity"><option value="demo-analyst-a">demo-analyst-a</option><option value="demo-analyst-b">demo-analyst-b</option></select></div>
+        <div><label for="case-id">Case ID</label><div class="case-field"><input id="case-id" value="CASE-001" required maxlength="200" autocomplete="off"><button id="load-case" type="submit">Load</button></div></div>
+        <div><label for="cutoff">Evidence cutoff · UTC</label><input id="cutoff" type="datetime-local" value="2026-10-22T12:00" required step="60" aria-describedby="cutoff-help"></div>
+        <div><label for="hops">Max hops</label><select id="hops"><option value="1">1</option><option value="2">2</option><option value="3" selected>3</option></select></div>
+        <button id="start" type="button" class="primary">Start new run</button>
+      </div>
+      <label class="notice" for="request-advice"><input id="request-advice" type="checkbox" aria-describedby="advice-consent"> Include AI recommendation</label>
+      <p id="advice-consent" class="notice">Optional: sends this run's permitted synthetic evidence to the configured external provider and may incur cost. Advisory only; the analyst decides. Applies to new runs only.</p>
+      <p id="cutoff-help" class="notice">Cutoff is interpreted as UTC, not your local timezone. Starting creates a new persisted run; changing these settings does not alter an existing run.</p>
+      <details id="setup-explainer" class="step-help">
+        <summary>Behind this step · Set the investigation scope</summary>
+        <p><strong>You choose:</strong> the demo analyst, case, UTC cutoff, relationship-search budget and whether to request model advice. The demo is currently case/account-centred, not anchored to a flagged transaction.</p>
+        <ul>
+          <li><strong>Analyst and case:</strong> GraphQL passes your demo identity to the backend, which checks case access before reading evidence. These public identities illustrate access rules, not secure bank logins.</li>
+          <li><strong>Cutoff:</strong> the backend selects the latest evidence version known by that time, then checks that its event also happened by that time. A late-arriving fact is not available before the system knew it.</li>
+          <li><strong>Hops:</strong> how many relationship links to explore from account A—not LangGraph steps. At the default cutoff: one hop reaches device X, two reach account B sharing it, three reach B’s AUD 2,400 transfer to C. Access, freshness and cutoff rules still apply.</li>
+          <li><strong>Start new run:</strong> sends the settings to the GraphQL <code>startRun</code> mutation. The backend collects evidence, LangGraph drafts cited facts, optionally requests model advice, then pauses for human review.</li>
+        </ul>
+        <p><strong>Check before starting:</strong> the cutoff is UTC, the search is bounded, and external model advice is optional and may cost money. Changing settings does not refresh a saved run; starting again creates a separate snapshot.</p>
+      </details>
+    </form>
+    <div class="feedback"><div id="error" role="alert" aria-live="assertive"></div><div id="progress" role="status" aria-live="polite" aria-atomic="true"></div></div>
+    <div id="workspace" class="layout" aria-busy="false">
+      <aside class="panel" aria-label="Recent investigation runs"><div class="section-head"><div><h2>Recent runs</h2><p class="small muted">Latest 20 · this case</p></div><button id="reload" type="button">Reload</button></div><div id="run-list"></div><details class="step-help sidebar-help"><summary>Behind this step · Reload</summary><p>GraphQL <code>runs</code> lists saved runs for this case; <code>run</code> loads the selected snapshot and its latest review status from the database. Reload does not search for new evidence, call the model or start another investigation.</p><p>To investigate with newer evidence or different settings, start a new run. Switching case or identity clears the displayed snapshot before loading the new scope.</p></details><div class="sidebar-note">Each run keeps its own evidence cutoff and review checkpoint. Select a run to inspect it.</div></aside>
+      <div>
+        <section id="empty" class="panel empty"><p class="eyebrow">Ready for review</p><h2>No run selected</h2><p>Load a case to see recent runs, or start a new investigation with the cutoff above.</p></section>
+        <section id="result" class="panel" hidden aria-labelledby="result-title">
+          <div class="section-head"><div><h2 id="result-title">Investigation snapshot</h2><p class="small muted">Frozen evidence · persisted checkpoint</p></div><span id="run-status" class="badge teal"></span></div>
+          <div class="content"><dl id="metadata" class="metadata"></dl><ol id="workflow" class="workflow" aria-label="Investigation workflow"></ol>
+            <details class="step-help"><summary>Behind this step · Freeze and pause</summary><p>The run ID links a frozen evidence snapshot, any requested model assessment and audit history. LangGraph saves a database checkpoint at its <code>human_review</code> interrupt. “Awaiting review” means execution is paused—not that an AI is still working in the background.</p><p>The checkpoint survives a server restart. Later evidence corrections do not rewrite this snapshot. Compare the saved cutoff and run ID with the case you intend to review.</p></details>
+            <div id="limitations" class="limitations"><h3>Limitations &amp; coverage</h3><ul id="limitation-list"></ul></div>
+            <section class="subsection" aria-labelledby="facts-title"><h3 id="facts-title">Cited facts</h3><details class="step-help"><summary>Behind this step · Draft the facts</summary><p>LangGraph’s deterministic <code>draft_cited_facts</code> node copies descriptions from available evidence and attaches their evidence IDs. An LLM does not write these facts. Other source states become limitations instead of supporting findings.</p><p>Follow a citation to its evidence card. A shared device is a lead, not proof that accounts belong to the same person or that a payment is fraudulent. “No findings” can mean insufficient visible evidence—not that the activity is safe.</p></details><ol id="facts" class="facts"></ol></section>
+            <section class="subsection" aria-labelledby="evidence-title"><h3 id="evidence-title">Evidence register</h3><p class="small muted">Source states are shown as returned. Denied evidence stays redacted; an unavailable source is not a negative finding.</p><details class="step-help"><summary>Behind this step · Check sources and gaps</summary><ul><li><strong>Available:</strong> permitted evidence eligible at this cutoff; it can support a fact.</li><li><strong>Stale:</strong> more than seven days old at the cutoff under this demo policy. It is not used as current support and does not expand the search.</li><li><strong>Denied:</strong> source content is redacted because access is restricted.</li><li><strong>Unknown:</strong> no graph evidence is visible for this search and cutoff.</li><li><strong>Unavailable:</strong> an integration cannot supply evidence; the watchlist integration is not configured in this lab.</li></ul><p><strong>Check:</strong> event time is when an observation happened; known-at time is when it entered the system. Version, source and batch identify the selected record’s lineage, not independently verified truth. Missing data is neither proof of fraud nor proof of innocence.</p></details><div id="evidence" class="evidence-grid"></div></section>
+            <section class="subsection" aria-labelledby="model-title"><h3 id="model-title">Model recommendation</h3><p><strong>AI suggestion — analyst decides. Citations are checked; reasoning is not verified. Not a fraud probability.</strong></p><details id="model-explainer" class="step-help"><summary>Behind this step · Request optional AI advice</summary><p>If you opted in when starting this run, LangGraph’s <code>model_advice</code> node sends available permitted evidence content, source IDs/states, cutoff and limitations to the configured OpenAI or OpenRouter endpoint. Non-available source descriptions and metadata are excluded. It requests a recommendation, short rationale, citations and gaps—not a fraud probability.</p><p>The backend validates the response structure and checks that citations refer only to available evidence. These checks do not prove the rationale is correct. Missing configuration, insufficient supporting evidence or failed provider/response checks leave advice unavailable; human review still works.</p><p><strong>Check:</strong> compare the suggestion with its cited sources and gaps, and make your own decision. Advice is saved with this run. Opening this explainer or reloading the run does not call the model again.</p></details><div id="model-assessment"></div></section>
+          </div>
+        </section>
+        <section id="review-panel" class="panel review-panel" hidden aria-labelledby="review-title"><div class="section-head"><div><h2 id="review-title">Human review</h2><p class="small muted">Decision applies only to the displayed run</p></div></div><div class="content">
+          <details id="review-explainer" class="step-help"><summary>Behind this step · Save the human decision</summary><p>You choose escalate, close or request information and explain why. The GraphQL <code>reviewRun</code> mutation saves your identity, decision and rationale with an audit event before resuming LangGraph’s checkpoint. The model cannot submit this review.</p><p><strong>Resume pending:</strong> the decision is saved, but graph completion has not been confirmed. Retry exactly the saved review; do not replace it. <strong>Reviewed:</strong> the graph has finished with that review and the record is locked. A competing different review is rejected.</p><p>“Close” records an analyst decision for this snapshot; it does not close a bank account or the case lifecycle. No choice blocks a payment or files a report. The original draft still says human review is required; the separate run status records whether that review has completed.</p></details>
+          <p class="small muted">Review target: <strong id="review-target" class="mono"></strong></p><div id="review-summary" class="review-summary" hidden></div>
+          <form id="review-form"><div class="review-grid"><div><label for="decision">Decision</label><select id="decision" required><option value="">Choose a decision</option><option value="escalate">Escalate</option><option value="close">Close</option><option value="request_information">Request information</option></select></div><div><label for="rationale">Rationale</label><textarea id="rationale" minlength="10" maxlength="2000" required aria-describedby="rationale-help"></textarea><div id="rationale-help" class="small muted">10–2,000 characters. Explain the decision and any evidence gaps.</div></div></div><div class="review-actions"><p id="review-help" class="small muted"></p><button id="submit-review" class="primary" type="submit">Save review</button></div></form>
+        </div></section>
+      </div>
+    </div>
+    <details class="help" open><summary>How this demo works</summary><p>A deterministic graph gathers synthetic evidence and drafts cited facts without an LLM. If requested for a new run, optional model advice is generated before the graph pauses on a persisted checkpoint for human review. Model advice never sets the human decision or rationale. A saved decision resumes that graph; if resume is pending, retry only the saved decision. “Reviewed” means this run’s review completed—it does not block an account or close the case lifecycle. Demo analyst tokens are public impersonation identities, not production authentication. Missing, stale, denied, or unavailable evidence limits what can be concluded.</p></details>
+  </main>
+  <script>
+    'use strict';
+    const $ = (id) => document.getElementById(id);
+    const fields = `id caseId status createdAt reviewedAt reviewer reviewDecision reviewRationale
+      investigation { caseId asOf requiresHumanReview findings { text citations }
+        evidence { id state description version knownAt sourceSystem batchId relationship eventTime } limitations
+        modelAssessment { status provider model promptVersion message advice { decision rationale citations gaps } } }`;
+    const operations = {
+      runs: `query RecentRuns($caseId: String!) { runs(caseId: $caseId) { ${fields} } }`,
+      run: `query SelectedRun($caseId: String!, $runId: String!) { run(caseId: $caseId, runId: $runId) { ${fields} } }`,
+      startRun: `mutation StartRun($caseId: String!, $input: InvestigationInput!) { startRun(caseId: $caseId, input: $input) { ${fields} } }`,
+      reviewRun: `mutation ReviewRun($caseId: String!, $runId: String!, $input: ReviewInput!) { reviewRun(caseId: $caseId, runId: $runId, input: $input) { ${fields} } }`
+    };
+    const statusLabels = { awaiting_review: 'Awaiting review', review_pending: 'Resume pending', reviewed: 'Reviewed' };
+    const decisionLabels = { escalate: 'Escalate', close: 'Close', request_information: 'Request information' };
+    let runs = [], selected = null, busy = false, generation = 0, loadedScope = null;
+    const initialUrl = new URL(window.location.href);
+    let desiredRun = initialUrl.searchParams.get('runId');
+    if (initialUrl.searchParams.get('caseId')) $('case-id').value = initialUrl.searchParams.get('caseId');
+    const el = (tag, text, className) => {
+      const node = document.createElement(tag);
+      if (text !== undefined && text !== null) node.textContent = String(text);
+      if (className) node.className = className;
+      return node;
+    };
+    const display = (value) => value === null || value === undefined || value === '' ? 'Not provided' : String(value);
+    function date(value) {
+      if (!value) return 'Not recorded';
+      const parsed = new Date(value);
+      return Number.isNaN(parsed.getTime()) ? String(value) : parsed.toISOString().replace('T', ' ').replace('.000Z', ' UTC').replace(/Z$/, ' UTC');
+    }
+    function scope() { return { caseId: $('case-id').value.trim(), token: $('identity').value }; }
+    function scopeKey() { const s = scope(); return JSON.stringify([s.caseId, s.token]); }
+    function updateUrl(runId) {
+      const url = new URL(window.location.href);
+      url.searchParams.set('caseId', scope().caseId);
+      if (runId) url.searchParams.set('runId', runId); else url.searchParams.delete('runId');
+      window.history.replaceState(null, '', url);
+    }
+    function setBusy(value) {
+      busy = value;
+      $('workspace').setAttribute('aria-busy', String(value));
+      for (const id of ['identity', 'case-id', 'load-case', 'cutoff', 'hops', 'request-advice', 'start', 'reload']) $(id).disabled = value;
+      for (const button of $('run-list').querySelectorAll('button')) button.disabled = value;
+      const editable = selected && selected.status === 'awaiting_review';
+      $('decision').disabled = value || !editable;
+      $('rationale').disabled = value || !editable;
+      $('submit-review').disabled = value || !selected || !['awaiting_review', 'review_pending'].includes(selected.status);
+    }
+    function clearScope() {
+      generation++;
+      runs = []; selected = null; desiredRun = null; loadedScope = null;
+      $('result').hidden = true; $('review-panel').hidden = true; $('empty').hidden = false;
+      $('error').textContent = ''; $('progress').textContent = 'Case or identity changed. Load this case to see its runs.';
+      $('decision').value = ''; $('rationale').value = '';
+      renderList(); updateUrl(null);
+    }
+    async function request(operation, variables) {
+      let response;
+      try {
+        response = await fetch('/graphql', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${scope().token}` }, body: JSON.stringify({ query: operations[operation], variables }), credentials: 'same-origin', cache: 'no-store' });
+      } catch (_) { throw new Error('Connection failed. For a start or review submission, the outcome may be unknown. Reload recent runs before submitting again.'); }
+      let payload;
+      try { payload = await response.json(); } catch (_) { throw new Error(`The server returned an unreadable response (HTTP ${response.status}). Reload recent runs to check any submitted operation before trying again.`); }
+      if (payload.errors && payload.errors.length) {
+        const error = payload.errors[0];
+        const code = error.extensions && error.extensions.code;
+        const guidance = { NOT_FOUND: 'Check the case and run ID.', UNAUTHENTICATED: 'Choose a valid demo analyst and reload.', CONFLICT: 'Reload this run before attempting another review.', BAD_USER_INPUT: 'Check your inputs.' };
+        throw new Error(`${code ? `${code}: ` : ''}${error.message || 'GraphQL request failed.'}${guidance[code] ? ` ${guidance[code]}` : ''}`);
+      }
+      if (!response.ok || !payload.data || payload.data[operation] == null) throw new Error(`No ${operation === 'runs' ? 'run list' : 'run'} returned (HTTP ${response.status}). Reload recent runs to check the current state.`);
+      return payload.data[operation];
+    }
+    async function perform(message, task) {
+      if (busy) return;
+      const currentGeneration = generation;
+      $('error').textContent = ''; $('progress').textContent = message; setBusy(true);
+      try { const completion = await task(); if (currentGeneration === generation) $('progress').textContent = completion || 'Ready. Snapshot and review state are up to date for the last request.'; }
+      catch (error) { if (currentGeneration === generation) { $('error').textContent = error.message; $('progress').textContent = 'Request did not complete successfully. Any displayed snapshot is unchanged; it may not reflect the latest server state.'; } }
+      finally { setBusy(false); }
+    }
+    function renderList() {
+      $('run-list').replaceChildren();
+      if (!runs.length) $('run-list').append(el('p', 'No recent runs loaded. Load this case or start a new run.', 'sidebar-empty muted'));
+      for (const run of runs) {
+        const button = el('button', null, 'run-item'); button.type = 'button';
+        button.setAttribute('aria-current', String(Boolean(selected && selected.id === run.id)));
+        button.setAttribute('aria-label', `Open run ${run.id}, ${statusLabels[run.status] || run.status}`);
+        button.append(el('span', statusLabels[run.status] || run.status, 'badge'), el('span', run.id, 'mono'));
+        const time = el('time', date(run.createdAt)); time.dateTime = run.createdAt; button.append(time);
+        button.disabled = busy;
+        button.addEventListener('click', () => perform('Loading selected run…', async () => {
+          const result = await request('run', { caseId: scope().caseId, runId: run.id }); showRun(result);
+        }));
+        $('run-list').append(button);
+      }
+    }
+    function addPair(container, label, value, monospace = false) {
+      const group = el('div'); group.append(el('dt', label), el('dd', value, monospace ? 'mono' : '')); container.append(group);
+    }
+    function showRun(run) {
+      selected = run; desiredRun = run.id;
+      const index = runs.findIndex((item) => item.id === run.id);
+      if (index >= 0) runs[index] = run; else runs.unshift(run);
+      runs.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)); runs = runs.slice(0, 20);
+      updateUrl(run.id); renderList(); renderRun();
+    }
+    function renderRun() {
+      const run = selected, investigation = run.investigation;
+      $('empty').hidden = true; $('result').hidden = false; $('review-panel').hidden = false;
+      $('run-status').textContent = statusLabels[run.status] || run.status;
+      $('metadata').replaceChildren();
+      addPair($('metadata'), 'Run ID · immutable', run.id, true);
+      addPair($('metadata'), 'Case', run.caseId, true);
+      addPair($('metadata'), 'Evidence cutoff · immutable', date(investigation.asOf));
+      addPair($('metadata'), 'Created', date(run.createdAt));
+      addPair($('metadata'), 'Human review required', investigation.requiresHumanReview ? 'Yes' : 'No');
+      addPair($('metadata'), 'Workflow status', statusLabels[run.status] || run.status);
+      $('workflow').replaceChildren();
+      ['Draft', 'Human review', 'Reviewed'].forEach((label, index) => {
+        const item = el('li', `${index + 1}. ${label}`);
+        if (index === (run.status === 'reviewed' ? 2 : 1)) item.setAttribute('aria-current', 'step');
+        $('workflow').append(item);
+      });
+      $('limitation-list').replaceChildren();
+      const limitations = investigation.limitations || [];
+      for (const limitation of limitations.length ? limitations : ['No additional limitations returned. This remains synthetic evidence, not proof of fraud.']) $('limitation-list').append(el('li', limitation));
+      const evidence = investigation.evidence || [];
+      const anchors = new Map(evidence.map((item, index) => [item.id, `evidence-${index}`]));
+      $('facts').replaceChildren();
+      for (const finding of investigation.findings || []) {
+        const item = el('li'); item.append(el('p', finding.text));
+        const citations = el('div', null, 'citations');
+        for (const citation of finding.citations || []) {
+          if (anchors.has(citation)) { const link = el('a', citation); link.href = `#${anchors.get(citation)}`; link.setAttribute('aria-label', `Evidence ${citation}`); citations.append(link); }
+          else citations.append(el('span', `${citation} (source not returned)`, 'muted'));
+        }
+        if (!citations.childNodes.length) citations.append(el('span', 'No citations returned.', 'muted'));
+        item.append(citations); $('facts').append(item);
+      }
+      if (!$('facts').childNodes.length) $('facts').append(el('li', 'No findings returned.', 'muted'));
+      $('evidence').replaceChildren();
+      evidence.forEach((item, index) => {
+        const card = el('article', null, 'evidence-card'); card.id = `evidence-${index}`;
+        const heading = el('div', null, 'card-head'); heading.append(el('strong', item.id, 'mono small'), el('span', item.state, item.state === 'available' ? 'badge teal' : 'badge'));
+        card.append(heading, el('p', display(item.description)));
+        if (item.state === 'denied') card.append(el('p', 'Access denied · source content remains redacted as returned.', 'small muted'));
+        if (item.state === 'unavailable') card.append(el('p', 'Source unavailable · do not interpret this as a clear result.', 'small muted'));
+        const details = el('dl');
+        for (const [label, value] of [['Source system', display(item.sourceSystem)], ['Version', display(item.version)], ['Known at · UTC', item.knownAt ? date(item.knownAt) : 'Not provided'], ['Event time · UTC', item.eventTime ? date(item.eventTime) : 'Not provided'], ['Batch ID', display(item.batchId)], ['Relationship', display(item.relationship)]]) addPair(details, label, value);
+        card.append(details); $('evidence').append(card);
+      });
+      if (!evidence.length) $('evidence').append(el('p', 'No evidence returned.', 'muted'));
+      renderModelAssessment(investigation.modelAssessment, anchors);
+      renderReview();
+    }
+    function renderModelAssessment(assessment, anchors) {
+      const panel = $('model-assessment'); panel.replaceChildren();
+      if (!assessment) { panel.append(el('p', 'Not requested', 'muted')); return; }
+      const metadata = el('dl', null, 'metadata');
+      addPair(metadata, 'Provider', display(assessment.provider));
+      addPair(metadata, 'Model', display(assessment.model));
+      addPair(metadata, 'Prompt version', display(assessment.promptVersion));
+      panel.append(metadata);
+      if (assessment.status !== 'completed') {
+        panel.append(el('p', 'Recommendation unavailable.', 'small muted'));
+        panel.append(el('p', assessment.message || 'No explanation returned.', 'mono'));
+        return;
+      }
+      if (assessment.message) panel.append(el('p', assessment.message, 'mono'));
+      const advice = assessment.advice;
+      if (!advice) { panel.append(el('p', 'No recommendation returned.', 'muted')); return; }
+      panel.append(el('h3', `Recommendation: ${decisionLabels[advice.decision] || display(advice.decision)}`));
+      const rationale = el('p', advice.rationale); rationale.style.whiteSpace = 'pre-wrap';
+      rationale.style.overflowWrap = 'anywhere'; panel.append(rationale);
+      panel.append(el('h3', 'Citations'));
+      const citations = el('div', null, 'citations');
+      for (const citation of advice.citations || []) {
+        if (anchors.has(citation)) {
+          const link = el('a', citation); link.href = `#${anchors.get(citation)}`;
+          link.setAttribute('aria-label', `Evidence ${citation}`); citations.append(link);
+        } else citations.append(el('span', `${citation} (source not returned)`, 'muted'));
+      }
+      if (!citations.childNodes.length) citations.append(el('span', 'No citations returned.', 'muted'));
+      panel.append(citations, el('h3', 'Gaps'));
+      const gaps = el('ul');
+      for (const gap of advice.gaps || []) gaps.append(el('li', gap, 'mono'));
+      if (!gaps.childNodes.length) gaps.append(el('li', 'No gaps returned; this does not establish complete coverage.', 'muted'));
+      panel.append(gaps);
+    }
+    function renderReview() {
+      const run = selected, pending = run.status === 'review_pending', reviewed = run.status === 'reviewed';
+      $('review-target').textContent = run.id;
+      $('decision').value = run.reviewDecision || ''; $('rationale').value = run.reviewRationale || '';
+      $('review-summary').replaceChildren(); $('review-summary').hidden = !(pending || reviewed);
+      if (pending || reviewed) {
+        const summary = $('review-summary');
+        summary.append(el('p', pending ? 'Decision saved. Graph resume is still pending.' : 'Review completed. This record is locked.'));
+        summary.append(el('p', `Reviewer: ${display(run.reviewer)} · ${date(run.reviewedAt)}`));
+        summary.append(el('p', `Decision: ${decisionLabels[run.reviewDecision] || display(run.reviewDecision)}`));
+        summary.append(el('p', `Rationale: ${display(run.reviewRationale)}`));
+      }
+      $('review-help').textContent = pending ? 'Retry resumes the persisted checkpoint using exactly the saved decision and rationale. A different decision cannot be submitted.' : reviewed ? 'Reviewed does not mean an account was blocked or the case lifecycle was closed.' : run.status === 'awaiting_review' ? 'Saving records your demo identity and resumes this run. Review the frozen evidence before submitting.' : 'This run is not currently accepting a review.';
+      $('submit-review').textContent = pending ? 'Retry saved review' : reviewed ? 'Review locked' : 'Save review';
+      setBusy(busy);
+    }
+    async function loadRuns(force = false) {
+      if (busy || !scope().caseId) return;
+      if (!force && loadedScope === scopeKey()) return;
+      await perform('Loading recent runs…', async () => {
+        runs = await request('runs', { caseId: scope().caseId }); loadedScope = scopeKey(); renderList();
+        const runId = desiredRun || (selected && selected.id) || (runs[0] && runs[0].id);
+        if (runId) showRun(await request('run', { caseId: scope().caseId, runId }));
+        else return 'No runs yet. Start a new run to create a persisted snapshot.';
+      });
+    }
+    $('scope-form').addEventListener('submit', (event) => { event.preventDefault(); loadRuns(true); });
+    $('case-id').addEventListener('input', clearScope);
+    $('case-id').addEventListener('change', () => loadRuns());
+    $('identity').addEventListener('change', () => { clearScope(); loadRuns(); });
+    $('reload').addEventListener('click', () => loadRuns(true));
+    $('start').addEventListener('click', () => {
+      if (!$('scope-form').reportValidity() || busy) return;
+      if (!scope().caseId) { $('error').textContent = 'Enter a case ID, not just whitespace.'; $('case-id').focus(); return; }
+      perform('Creating a new persisted investigation… Do not resubmit.', async () => {
+        const asOf = new Date(`${$('cutoff').value}Z`).toISOString();
+        const run = await request('startRun', { caseId: scope().caseId, input: { asOf, maxHops: Number($('hops').value), requestAdvice: $('request-advice').checked } });
+        showRun(run);
+      });
+    });
+    $('review-form').addEventListener('submit', (event) => {
+      event.preventDefault();
+      if (!selected || busy) return;
+      const run = selected, pending = run.status === 'review_pending';
+      if (!pending && run.status !== 'awaiting_review') return;
+      const input = pending ? { decision: run.reviewDecision, rationale: run.reviewRationale } : { decision: $('decision').value, rationale: $('rationale').value };
+      if (!pending && (input.rationale.trim().length < 10 || input.rationale.length > 2000)) { $('error').textContent = 'Enter a rationale with at least 10 non-padding characters and at most 2,000 characters.'; $('rationale').focus(); return; }
+      if (pending && (!input.decision || !input.rationale)) { $('error').textContent = 'The pending review did not return a saved decision and rationale. Reload this run before retrying.'; return; }
+      perform(pending ? 'Retrying the saved review…' : 'Saving review and resuming the graph…', async () => {
+        const result = await request('reviewRun', { caseId: run.caseId, runId: run.id, input }); showRun(result);
+      });
+    });
+    renderList(); setBusy(false); loadRuns();
+  </script>
+</body>
+</html>

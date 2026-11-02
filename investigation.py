@@ -4,16 +4,20 @@ import json
 import os
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Annotated, TypedDict
 
 from fastapi import Depends, FastAPI, HTTPException
+from fastapi.responses import FileResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from langgraph.graph import END, START, StateGraph
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
 from contracts import Correction, Evidence, Finding, Investigation, InvestigationRequest, Review
+from decision_support import assess
 from graphql_api import create_graphql_router
+from investigation_runs import InvestigationRuns
 from storage import open_database
 
 
@@ -182,8 +186,7 @@ def create_app(database: str | None = None) -> FastAPI:
     def health():
         return {"status": "ok", "data": "synthetic-only"}
 
-    @app.post("/cases/{case_id}/investigate", response_model=Investigation)
-    def investigate(case_id: str, request: InvestigationRequest, identity: str = Depends(actor)):
+    def collect_evidence(case_id: str, request: InvestigationRequest, identity: str):
         authorize(case_id, identity)
         with engine.connect() as db:
             rows = (
@@ -246,10 +249,15 @@ def create_app(database: str | None = None) -> FastAPI:
             state="unavailable",
             description="Watchlist integration is not configured in this lab.",
         )
-        result = workflow.invoke(
-            {"evidence": list(evidence.values()), "findings": [], "limitations": []}
-        )
+        return list(evidence.values())
+
+    @app.post("/cases/{case_id}/investigate", response_model=Investigation)
+    def investigate(case_id: str, request: InvestigationRequest, identity: str = Depends(actor)):
+        evidence = collect_evidence(case_id, request, identity)
+        result = workflow.invoke({"evidence": evidence, "findings": [], "limitations": []})
         response = Investigation(case_id=case_id, as_of=request.as_of, **result)
+        if request.request_advice:
+            response.model_assessment = assess(response)
         with engine.begin() as db:
             audit(db, case_id, identity, "investigation", response.model_dump(mode="json"))
         return response
@@ -328,8 +336,14 @@ def create_app(database: str | None = None) -> FastAPI:
             )
         return [{**dict(row), "payload": json.loads(row["payload"])} for row in rows]
 
+    runs = InvestigationRuns(engine, collect_evidence, authorize, audit, draft)
+
+    @app.get("/analyst", include_in_schema=False)
+    def analyst_ui():
+        return FileResponse(Path(__file__).parent / "web" / "index.html")
+
     app.include_router(
-        create_graphql_router(investigate, correct, review, get_audit, actor, bearer),
+        create_graphql_router(investigate, correct, review, get_audit, actor, bearer, runs),
         prefix="/graphql",
     )
     return app

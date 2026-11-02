@@ -1,9 +1,11 @@
+import json
 import os
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from uuid import uuid4
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -433,3 +435,388 @@ def test_graphql_rejects_invalid_writes_and_excess_aliases_without_side_effects(
     )
     assert client.post("/graphql", json={"query": repeated}).json()["errors"]
     assert client.get("/cases/CASE-001/audit").json() == []
+
+
+RUN_FIELDS = """id caseId status createdAt reviewedAt reviewer reviewDecision reviewRationale
+  investigation { asOf findings { text citations } evidence { id version state description }
+                  limitations requiresHumanReview }"""
+START_RUN = (
+    """mutation Start($case: String!, $input: InvestigationInput!) {
+  startRun(caseId: $case, input: $input) { """
+    + RUN_FIELDS
+    + " } }"
+)
+REVIEW_RUN = (
+    """mutation Review($case: String!, $id: String!, $input: ReviewInput!) {
+  reviewRun(caseId: $case, runId: $id, input: $input) { """
+    + RUN_FIELDS
+    + " } }"
+)
+GET_RUN = (
+    """query Run($case: String!, $id: String!) {
+  run(caseId: $case, runId: $id) { """
+    + RUN_FIELDS
+    + " } }"
+)
+
+
+def test_run_survives_restart_freezes_evidence_and_reviews_exactly_once(database):
+    headers = {"Authorization": "Bearer demo-analyst-a"}
+    with TestClient(create_app(database), headers=headers) as client:
+        started = client.post(
+            "/graphql",
+            json={
+                "query": START_RUN,
+                "variables": {
+                    "case": "CASE-001",
+                    "input": {"asOf": "2026-10-22T12:00:00Z", "maxHops": 3},
+                },
+            },
+        ).json()
+        assert "errors" not in started, started
+        run = started["data"]["startRun"]
+        assert run["status"] == "awaiting_review"
+        assert run["reviewer"] is None
+        assert {ref for f in run["investigation"]["findings"] for ref in f["citations"]} == {
+            "E-001",
+            "E-002",
+            "E-003",
+        }
+        assert client.post(CORRECTION_URL, json=CORRECTION).status_code == 201
+        assert [e["action"] for e in client.get("/cases/CASE-001/audit").json()] == [
+            "run_started",
+            "evidence_correction",
+        ]
+    with TestClient(create_app(database), headers=headers) as reopened:
+        variables = {"case": "CASE-001", "id": run["id"]}
+        loaded = reopened.post("/graphql", json={"query": GET_RUN, "variables": variables}).json()
+        assert loaded["data"]["run"] == run
+        review_variables = {
+            **variables,
+            "input": {
+                "decision": "request_information",
+                "rationale": "Verify this frozen synthetic lead.",
+            },
+        }
+        reviewed = reopened.post(
+            "/graphql", json={"query": REVIEW_RUN, "variables": review_variables}
+        ).json()
+        assert "errors" not in reviewed, reviewed
+        result = reviewed["data"]["reviewRun"]
+        assert result["status"] == "reviewed"
+        assert result["reviewer"] == "analyst-a"
+        assert result["reviewedAt"] is not None
+        assert result["investigation"] == run["investigation"]
+        retry = reopened.post(
+            "/graphql", json={"query": REVIEW_RUN, "variables": review_variables}
+        ).json()
+        assert retry == reviewed
+        events = reopened.get("/cases/CASE-001/audit").json()
+        assert [e["action"] for e in events] == [
+            "run_started",
+            "evidence_correction",
+            "human_review",
+            "run_reviewed",
+        ]
+        assert events[-2]["payload"]["run_id"] == run["id"]
+        assert events[-2]["payload"]["decision"] == "request_information"
+
+
+@pytest.mark.parametrize("failure_point", ["before_resume", "after_resume"])
+def test_saved_run_review_can_recover_after_interruption(client, monkeypatch, failure_point):
+    from contextlib import contextmanager
+
+    from investigation_runs import InvestigationRuns
+
+    run = client.post(
+        "/graphql",
+        json={
+            "query": START_RUN,
+            "variables": {"case": "CASE-001", "input": {"asOf": "2026-10-22T12:00:00Z"}},
+        },
+    ).json()["data"]["startRun"]
+    variables = {
+        "case": "CASE-001",
+        "id": run["id"],
+        "input": {"decision": "close", "rationale": "Reviewed the frozen synthetic snapshot."},
+    }
+    original = InvestigationRuns.workflow
+
+    @contextmanager
+    def broken(self):
+        if failure_point == "before_resume":
+            raise RuntimeError("Injected checkpoint connection outage")
+        with original(self) as graph:
+            yield graph
+        raise RuntimeError("Injected interruption after graph completed")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(InvestigationRuns, "workflow", broken)
+        failed = client.post("/graphql", json={"query": REVIEW_RUN, "variables": variables}).json()
+        assert failed["errors"]
+    pending = client.post(
+        "/graphql", json={"query": GET_RUN, "variables": {"case": "CASE-001", "id": run["id"]}}
+    ).json()["data"]["run"]
+    assert pending["status"] == "review_pending"
+    assert pending["reviewDecision"] == "close"
+    recovered = client.post("/graphql", json={"query": REVIEW_RUN, "variables": variables}).json()
+    assert recovered["data"]["reviewRun"]["status"] == "reviewed", recovered
+    events = client.get("/cases/CASE-001/audit").json()
+    assert [e["action"] for e in events] == ["run_started", "human_review", "run_reviewed"]
+
+
+def test_competing_run_reviews_cannot_replace_first_decision(client):
+    run = client.post(
+        "/graphql",
+        json={
+            "query": START_RUN,
+            "variables": {"case": "CASE-001", "input": {"asOf": "2026-10-22T12:00:00Z"}},
+        },
+    ).json()["data"]["startRun"]
+
+    def submit(decision):
+        return client.post(
+            "/graphql",
+            json={
+                "query": REVIEW_RUN,
+                "variables": {
+                    "case": "CASE-001",
+                    "id": run["id"],
+                    "input": {
+                        "decision": decision,
+                        "rationale": "Reviewed the synthetic evidence snapshot.",
+                    },
+                },
+            },
+        ).json()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(submit, ["close", "escalate"]))
+    assert sum("errors" not in result for result in results) == 1, results
+    rejected = next(result for result in results if "errors" in result)
+    assert rejected["errors"][0]["extensions"]["code"] == "CONFLICT"
+    events = client.get("/cases/CASE-001/audit").json()
+    assert [e["action"] for e in events] == ["run_started", "human_review", "run_reviewed"]
+
+
+@pytest.mark.parametrize(
+    "operation",
+    [
+        '{ runs(caseId: "CASE-002") { id } }',
+        '{ run(caseId: "CASE-002", runId: "missing") { id } }',
+        'mutation { startRun(caseId: "CASE-002", input: {asOf: "2026-10-22T12:00:00Z"}) { id } }',
+        """mutation { reviewRun(caseId: "CASE-002", runId: "missing", input: {
+         decision: "close", rationale: "Synthetic review denied."}) { id } }""",
+    ],
+)
+def test_run_operations_enforce_case_access(client, operation):
+    result = client.post("/graphql", json={"query": operation}).json()
+    assert result["errors"][0]["extensions"]["code"] == "NOT_FOUND"
+    client.headers.pop("Authorization")
+    result = client.post("/graphql", json={"query": operation}).json()
+    assert result["errors"][0]["extensions"]["code"] == "UNAUTHENTICATED"
+
+
+@pytest.fixture
+def advice_provider(monkeypatch):
+    monkeypatch.setenv("DECISION_PROVIDER", "openai")
+    monkeypatch.setenv("DECISION_MODEL", "synthetic-test-model")
+    monkeypatch.setenv("OPENAI_API_KEY", "synthetic-test-key")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "synthetic-test-key")
+    requests = []
+    output = {
+        "decision": "request_information",
+        "rationale": "Verify the shared device lead.",
+        "citations": ["E-001", "E-002"],
+        "gaps": ["Watchlist unavailable."],
+    }
+    reply = {"choices": [{"finish_reason": "stop", "message": {"content": json.dumps(output)}}]}
+
+    def respond(request):
+        requests.append(request)
+        if reply.get("timeout"):
+            raise httpx.ReadTimeout("Synthetic provider timeout", request=request)
+        return httpx.Response(reply.get("status", 200), json=reply)
+
+    original = httpx.Client
+    monkeypatch.setattr(
+        "decision_support.httpx.Client",
+        lambda **kwargs: original(**kwargs, transport=httpx.MockTransport(respond)),
+    )
+    return requests, output, reply
+
+
+ADVICE_FIELDS = """status provider model promptVersion message
+ advice {decision rationale citations gaps}"""
+ADVICE_START = (
+    """mutation($case: String!, $input: InvestigationInput!) {
+ startRun(caseId:$case,input:$input){id status reviewer investigation {
+ requiresHumanReview modelAssessment {"""
+    + ADVICE_FIELDS
+    + "}}}}"
+)
+
+
+@pytest.mark.parametrize("provider", ["openai", "openrouter"])
+def test_model_advice_is_scoped_persisted_and_never_a_human_decision(
+    client, database, advice_provider, monkeypatch, provider
+):
+    requests, expected, _ = advice_provider
+    monkeypatch.setenv("DECISION_PROVIDER", provider)
+    args = {"case": "CASE-001", "input": {"asOf": "2026-10-22T12:00:00Z", "maxHops": 3}}
+    default = client.post("/graphql", json={"query": ADVICE_START, "variables": args}).json()
+    assert default["data"]["startRun"]["investigation"]["modelAssessment"] is None
+    assert requests == []
+    args["input"]["requestAdvice"] = True
+    result = client.post("/graphql", json={"query": ADVICE_START, "variables": args}).json()
+    run = result["data"]["startRun"]
+    assessment = run["investigation"]["modelAssessment"]
+    assert assessment["advice"] == expected
+    assert assessment["status"] == "completed"
+    assert assessment["provider"] == provider
+    assert assessment["model"] == "synthetic-test-model"
+    assert run["status"] == "awaiting_review"
+    assert run["reviewer"] is None
+    assert run["investigation"]["requiresHumanReview"] is True
+    assert len(requests) == 1
+    sent = json.loads(requests[0].content)
+    assert requests[0].url.host == ("api.openai.com" if provider == "openai" else "openrouter.ai")
+    evidence = json.loads(sent["messages"][1]["content"])
+    assert {item["id"] for item in evidence["available_evidence"]} == {"E-001", "E-002", "E-003"}
+    assert "restricted-profile" not in str(sent)
+    assert "Restricted synthetic profile details" not in str(sent)
+    assert all(item["state"] == "available" for item in evidence["available_evidence"])
+    with TestClient(
+        create_app(database), headers={"Authorization": "Bearer demo-analyst-a"}
+    ) as restarted:
+        loaded = restarted.post(
+            "/graphql",
+            json={
+                "query": 'query($id:String!){run(caseId:"CASE-001",runId:$id){investigation{modelAssessment{'
+                + ADVICE_FIELDS
+                + "}}}}",
+                "variables": {"id": run["id"]},
+            },
+        ).json()
+        assert loaded["data"]["run"]["investigation"]["modelAssessment"] == assessment
+        # The analyst may disagree. Resuming does not regenerate model advice.
+        reviewed = restarted.post(
+            "/graphql",
+            json={
+                "query": REVIEW_RUN,
+                "variables": {
+                    "case": "CASE-001",
+                    "id": run["id"],
+                    "input": {
+                        "decision": "escalate",
+                        "rationale": "Escalating for independent synthetic review.",
+                    },
+                },
+            },
+        ).json()
+        assert reviewed["data"]["reviewRun"]["reviewDecision"] == "escalate"
+    assert len(requests) == 1
+    events = client.get("/cases/CASE-001/audit").json()
+    assert events[1]["payload"]["investigation"]["model_assessment"]["advice"] == expected
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        "citation",
+        "denied_citation",
+        "empty_citations",
+        "decision",
+        "refusal",
+        "truncated",
+        "timeout",
+        "http_error",
+        "malformed",
+    ],
+)
+def test_invalid_model_advice_abstains_without_blocking_review(client, advice_provider, failure):
+    requests, output, reply = advice_provider
+    message = reply["choices"][0]["message"]
+    if failure in {"citation", "denied_citation", "empty_citations", "decision"}:
+        if failure == "decision":
+            output["decision"] = "block_account"
+        else:
+            output["citations"] = {
+                "citation": ["invented"],
+                "denied_citation": ["E-004"],
+                "empty_citations": [],
+            }[failure]
+        message["content"] = json.dumps(output)
+    elif failure == "refusal":
+        message["refusal"] = "Synthetic refusal"
+    elif failure == "truncated":
+        reply["choices"][0]["finish_reason"] = "length"
+    elif failure == "timeout":
+        reply["timeout"] = True
+    elif failure == "http_error":
+        reply["status"] = 429
+    else:
+        message["content"] = "not json"
+    result = client.post(
+        "/graphql",
+        json={
+            "query": ADVICE_START,
+            "variables": {
+                "case": "CASE-001",
+                "input": {"asOf": "2026-10-22T12:00:00Z", "requestAdvice": True},
+            },
+        },
+    ).json()
+    run = result["data"]["startRun"]
+    assert run["status"] == "awaiting_review"
+    assessment = run["investigation"]["modelAssessment"]
+    assert assessment["status"] == "unavailable"
+    assert assessment["advice"] is None
+    assert len(requests) == 1
+    assert "synthetic-test-key" not in str(result)
+    reviewed = client.post(
+        "/graphql",
+        json={
+            "query": REVIEW_RUN,
+            "variables": {
+                "case": "CASE-001",
+                "id": run["id"],
+                "input": {
+                    "decision": "request_information",
+                    "rationale": "Gather the missing synthetic evidence.",
+                },
+            },
+        },
+    ).json()
+    assert reviewed["data"]["reviewRun"]["status"] == "reviewed"
+
+
+def test_advice_does_not_send_without_evidence_configuration_or_authorization(
+    client, advice_provider, monkeypatch
+):
+    requests, _, _ = advice_provider
+    for cutoff in ["2026-10-19T00:00:00Z", "2026-10-30T00:00:00Z"]:
+        result = client.post(
+            "/cases/CASE-001/investigate", json={"as_of": cutoff, "request_advice": True}
+        ).json()
+        assert result["model_assessment"]["status"] == "unavailable"
+        assert result["model_assessment"]["advice"] is None
+    monkeypatch.delenv("OPENAI_API_KEY")
+    result = client.post(
+        "/cases/CASE-001/investigate",
+        json={"as_of": "2026-10-22T12:00:00Z", "request_advice": True},
+    ).json()
+    assert "not configured" in result["model_assessment"]["message"]
+    for case_id in ["CASE-002", "missing"]:
+        result = client.post(
+            "/graphql",
+            json={
+                "query": ADVICE_START,
+                "variables": {
+                    "case": case_id,
+                    "input": {"asOf": "2026-10-22T12:00:00Z", "requestAdvice": True},
+                },
+            },
+        ).json()
+        assert result["errors"][0]["extensions"]["code"] == "NOT_FOUND"
+    assert requests == []

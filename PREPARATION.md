@@ -40,7 +40,8 @@ There is also a separate Splink/DuckDB lab with supervised training, held-out pa
 evaluation, blocking recall and explicit false-positive/missed-match examples.
 REST and Strawberry GraphQL now expose the same investigation, correction, review and
 audit operations, with shared validation and policies. GraphiQL is a developer playground,
-not the analyst-facing review UI described below.
+separate from the new `/analyst` workbench. The workbench uses persisted investigation
+snapshots and a real LangGraph human-review interrupt, with restart/resume and safe retries.
 
 Next slices, in priority order:
 
@@ -55,13 +56,17 @@ Next slices, in priority order:
    false-positive pairs. Shared device IDs do not contribute to matching. Next persist
    reviewable candidate links, model versions and reviewer accept/reject decisions;
    never equate a score, shared device or address with confirmed identity or fraud.
-3. **Human review UI:** Next.js App Router screen showing evidence, cutoff, limitations,
-   and source paths. Bind reviews to an investigation version and require a rationale.
-   Demonstrate stale, denied and partial-source states, not just the happy path.
-4. **Constrained LLM drafting:** allow only typed, scoped read tools; keep evidence text
-   untrusted; enforce tool/node/row budgets. Validate citations and abstain on unsupported
-   claims. Preserve deterministic output when provider calls fail. Add prompt-injection,
-   fabricated-citation and denied-data-leak evaluation cases before claiming safe drafting.
+3. **Human review UI (first slice implemented):** framework-independent workbench showing
+   evidence, cutoff, limitations and cited facts. Reviews bind to a frozen run, require a
+   rationale and resume a persisted LangGraph checkpoint. Next.js App Router remains a
+   separate skill gap; the current UI does not demonstrate React/Next.js proficiency.
+   Next add independent-reviewer policy, workflow-version migration and recovery tooling.
+4. **Model decision support (first slice implemented):** opt-in OpenAI/OpenRouter advice
+   uses permitted available evidence, structured outputs and citation membership checks.
+   Advice freezes with the run and never supplies the human decision. Provider failures
+   preserve deterministic facts and review. This is not a validated fraud classifier or
+   proof of grounding: next add labelled recommendation-quality and prompt-injection
+   evaluations, calibrated abstention and spending controls before any operational use.
 5. **Operational readiness:** real identity/purpose checks, denied-access audit, idempotent
    review submissions, versioned model/prompt/config, diagnostic logs with no sensitive
    payloads, deployment/rollback runbook and tested database recovery.
